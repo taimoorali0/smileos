@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Creates or rebuilds the "demo" clinic with sample data (only that clinic is reset).
-# Demo logins: admin / drkhan / frontdesk / billing, password smileos123
+# Demo logins (clinic code: demo): admin / drkhan / frontdesk / billing, password smileos123
 set -euo pipefail
+source /opt/smileos/deploy/env.sh
 cd /opt/smileos/server
-set -a; source /etc/smileos.env; set +a
 npm ci >/dev/null
-sudo -E -u smileos node src/create-demo.js
-echo "Demo clinic: https://${BASE_DOMAIN}  – clinic code: demo"
+run_as_app node src/create-demo.js
+echo "Demo clinic: https://${BASE_DOMAIN:-your-domain} – clinic code: demo"
