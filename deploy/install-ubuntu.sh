@@ -32,12 +32,7 @@ id smileos >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib
 systemctl enable --now mysql
 if [[ ! -f /etc/smileos.env ]]; then
   DB_PASS=$(openssl rand -hex 16)
-  mysql -u root <<SQL
-CREATE USER IF NOT EXISTS 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';
-ALTER USER 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL ON \`smileos%\`.* TO 'smileos'@'localhost';
-FLUSH PRIVILEGES;
-SQL
+  mysql -u root -e "CREATE USER IF NOT EXISTS 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}'; ALTER USER 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';"
   cat > /etc/smileos.env <<ENV
 NODE_ENV=production
 MULTI_TENANT=1
@@ -55,6 +50,14 @@ UPLOAD_DIR=/var/lib/smileos/uploads
 ENV
   chmod 600 /etc/smileos.env
 fi
+# Settings from an earlier install may lack the multi-clinic options: add any that are missing
+grep -q '^MULTI_TENANT=' /etc/smileos.env || echo 'MULTI_TENANT=1' >> /etc/smileos.env
+grep -q '^BASE_DOMAIN=' /etc/smileos.env || echo "BASE_DOMAIN=${DOMAIN}" >> /etc/smileos.env
+grep -q '^CONTROL_DB=' /etc/smileos.env || echo 'CONTROL_DB=smileos_control' >> /etc/smileos.env
+grep -q '^APP_KEY=' /etc/smileos.env || echo "APP_KEY=$(openssl rand -hex 32)" >> /etc/smileos.env
+grep -q '^NODE_ENV=' /etc/smileos.env || echo 'NODE_ENV=production' >> /etc/smileos.env
+# Always (re)apply: the app must be able to create one database per clinic (smileos_t_<clinic>)
+mysql -u root -e "GRANT ALL ON \`smileos%\`.* TO 'smileos'@'localhost'; FLUSH PRIVILEGES;"
 [[ -f /etc/smileos-backup.key ]] || { openssl rand -hex 32 > /etc/smileos-backup.key; chmod 600 /etc/smileos-backup.key; }
 
 echo "==> Downloading and building SmileOS"
