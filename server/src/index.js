@@ -5,9 +5,12 @@ import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
 import { h } from './http.js';
-import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
+import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, requestPasswordReset, completePasswordReset, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
 import { q } from './db.js';
 import { tenantMiddleware } from './tenancy.js';
+import { sendEmail } from './logic/messaging.js';
+import { publicBase } from './logic/settings.js';
+import { context } from './db.js';
 import superRoutes from './routes/super.js';
 import setup from './routes/setup.js';
 import patients from './routes/patients.js';
@@ -56,6 +59,12 @@ app.post('/api/auth/login', loginLimit, h(async (req, res) => {
 }));
 
 app.use('/api/public', publicRoutes);
+app.post('/api/auth/forgot', loginLimit, h(async (req) => {
+  const baseUrl = context().tenant ? await publicBase() : `${req.protocol}://${req.get('host')}`;
+  await requestPasswordReset(req.body.login, req, { sendEmail, baseUrl });
+  return { ok: true, message: 'If that account has an email address on file, a reset link is on its way. It works for 30 minutes.' };
+}));
+app.post('/api/auth/reset', loginLimit, h(async (req) => completePasswordReset(req.body.token, req.body.password, req)));
 app.use('/api', authMiddleware);
 app.post('/api/auth/mfa', h(async (req) => verifyMfa(req, req.body.code)));
 app.get('/api/auth/me', h(async (req) => ({ ...req.user, permissions: [...req.user.permissions], idleMinutes: (await securityPolicy()).idleMinutes })));

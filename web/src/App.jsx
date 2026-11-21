@@ -6,7 +6,7 @@ import { ShareModal } from './components/Share.jsx';
 import { Register } from './pages/Public.jsx';
 import SuperAdmin from './pages/SuperAdmin.jsx';
 import { AppCtx, Icon, Modal, Select, Field } from './components/ui.jsx';
-import Login from './pages/Login.jsx';
+import Login, { ResetPassword } from './pages/Login.jsx';
 import Schedule from './pages/Schedule.jsx';
 import Family from './pages/Family.jsx';
 import Account from './pages/Account.jsx';
@@ -42,6 +42,7 @@ export default function App() {
   if (path.startsWith('/book')) return <Booking />;
   if (path.startsWith('/portal')) return <Portal />;
   if (path.startsWith('/register')) return <Register />;
+  if (path.startsWith('/reset-password')) return <ResetPassword />;
   if (path.startsWith('/superadmin')) return <SuperAdmin />;
   return <StaffApp />;
 }

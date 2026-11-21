@@ -42,6 +42,7 @@ await q('INSERT INTO app_user (username, full_name, password_hash, group_id) VAL
 await q('INSERT INTO app_user (username, full_name, password_hash, group_id, provider_id) VALUES (?,?,?,?,?)', ['drkhan', 'Dr. Sami Khan', hash, gid.Dentist, prov.KH]);
 await q('INSERT INTO app_user (username, full_name, password_hash, group_id) VALUES (?,?,?,?)', ['frontdesk', 'Sara Ahmed', hash, gid.FrontDesk]);
 await q('INSERT INTO app_user (username, full_name, password_hash, group_id) VALUES (?,?,?,?)', ['billing', 'Omar Billing', hash, gid.Billing]);
+await q("UPDATE app_user SET email=CONCAT(username, '@demo.smileos.example')");
 
 
 await ins('INSERT INTO appt_type (name, color, minutes, code_ids) VALUES (?,?,?,?)', ['Recall visit', '#14B8A6', 60, [code.D0120, code.D1110, code.D0274].join(',')]);
