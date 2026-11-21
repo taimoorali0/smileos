@@ -103,14 +103,37 @@ if (fs.existsSync(webDist)) {
   app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
 }
 
-app.use((err, _req, res, _next) => {
+const DB_HINTS = {
+  ER_BAD_FIELD_ERROR: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
+  ER_NO_SUCH_TABLE: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
+  ER_DBACCESS_DENIED_ERROR: 'The SmileOS database user is not allowed to create clinic databases. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ER_ACCESS_DENIED_ERROR: 'SmileOS cannot sign in to MySQL. Check DB_USER / DB_PASSWORD in /etc/smileos.env.',
+  ER_TABLEACCESS_DENIED_ERROR: 'The SmileOS database user is missing permissions. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ECONNREFUSED: 'The database server is not running. Start it with: sudo systemctl start mysql',
+};
+app.use((err, req, res, _next) => {
   const status = err.status || (err.code === 'ER_DUP_ENTRY' ? 409 : 500);
-  if (status === 500) console.error(err);
+  if (status === 500) {
+    err.ref = Math.random().toString(36).slice(2, 8).toUpperCase();
+    console.error(`[error ${err.ref}] ${req.method} ${req.originalUrl}:`, err);
+    const hint = DB_HINTS[err.code];
+    return res.status(500).json({ error: hint ? `${hint} (ref ${err.ref})` : `Something went wrong (ref ${err.ref}). Ask your administrator to check the server log for this reference.` });
+  }
   res.status(status).json({ error: status === 500 ? 'Something went wrong. The error was logged.' : (err.code === 'ER_DUP_ENTRY' ? 'That value already exists' : err.message) });
 });
 
 if (process.argv[1] && process.argv[1].endsWith('index.js')) {
   const port = Number(process.env.PORT || 4000);
+  // Bring every database up to date before accepting requests (safe to run on every start)
+  try {
+    const { migrateClinicDb, migrateControlDb } = await import('./migrations.js');
+    const { CONTROL_DB, DEFAULT_DB } = await import('./db.js');
+    const { cq } = await import('./tenancy.js');
+    await migrateControlDb(CONTROL_DB);
+    if (process.env.MULTI_TENANT !== '1') await migrateClinicDb(DEFAULT_DB);
+    for (const t of await cq("SELECT db_name FROM tenant WHERE status<>'deleted'")) await migrateClinicDb(t.db_name);
+    console.log('Databases are up to date');
+  } catch (e) { console.error('Database update at startup failed:', e.message); }
   app.listen(port, () => console.log(`SmileOS server on http://localhost:${port}`));
   startAutomation();
 }

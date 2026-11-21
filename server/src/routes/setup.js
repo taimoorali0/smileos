@@ -83,6 +83,7 @@ r.post('/users', need('SecurityAdmin'), h(async (req) => {
   const { username, full_name, email, group_id, provider_id } = req.body;
   if (!username || !/^[A-Za-z0-9._-]{3,40}$/.test(username)) throw bad('Username: 3–40 letters, numbers, dots, dashes');
   if (!group_id) throw bad('Choose a role');
+  if (await one('SELECT id FROM app_user WHERE username=?', [username])) throw bad(`The username "${username}" is already taken. Choose another.`);
   const pw = tempPassword();
   const res = await q('INSERT INTO app_user (username, full_name, email, password_hash, group_id, provider_id, must_change_password) VALUES (?,?,?,?,?,?,1)',
     [username, full_name || username, email || null, await bcrypt.hash(pw, BCRYPT_COST), group_id, provider_id || null]);
