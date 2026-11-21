@@ -6,12 +6,17 @@ export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
 export const setToken = () => {};
 export const getToken = () => '';
 
+// Clinic code for the shared address (smileos.example.com): typed at sign-in or taken from ?clinic=
+export const getClinic = () => { try { return localStorage.getItem('smileos.clinic') || ''; } catch { return ''; } };
+export const setClinic = (code) => { try { if (code) localStorage.setItem('smileos.clinic', code); else localStorage.removeItem('smileos.clinic'); } catch { /* storage blocked */ } };
+(() => { const c = new URLSearchParams(window.location.search).get('clinic'); if (c && /^[a-z0-9-]{3,40}$/i.test(c)) setClinic(c.toLowerCase()); })();
+
 export async function api(method, url, body, opts = {}) {
   const isForm = body instanceof FormData;
   const res = await fetch('/api' + url, {
     method,
     credentials: 'same-origin',
-    headers: { 'x-smileos': '1', ...(isForm ? {} : { 'content-type': 'application/json' }), ...(opts.background ? { 'x-smileos-background': '1' } : {}) },
+    headers: { 'x-smileos': '1', ...(getClinic() ? { 'x-clinic': getClinic() } : {}), ...(isForm ? {} : { 'content-type': 'application/json' }), ...(opts.background ? { 'x-smileos-background': '1' } : {}) },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
   });
   let data = null;

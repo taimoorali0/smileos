@@ -5,9 +5,12 @@ import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
 import { h } from './http.js';
-import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
+import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, requestPasswordReset, completePasswordReset, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
 import { q } from './db.js';
-import { tenantMiddleware } from './tenancy.js';
+import { tenantMiddleware, CLINIC_COOKIE } from './tenancy.js';
+import { sendEmail } from './logic/messaging.js';
+import { clinicUrl } from './logic/settings.js';
+import { context } from './db.js';
 import superRoutes from './routes/super.js';
 import setup from './routes/setup.js';
 import patients from './routes/patients.js';
@@ -41,6 +44,7 @@ app.use(express.urlencoded({ extended: false }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, name: 'SmileOS' }));
 app.use('/api/super', superRoutes);
+app.post('/api/clinic/forget', (req, res) => { res.clearCookie(CLINIC_COOKIE, { path: '/' }); res.json({ ok: true }); });
 app.use('/api', tenantMiddleware);
 
 // Login is rate limited per IP on top of the per-account lockout
@@ -52,10 +56,19 @@ const loginLimit = (req, _res, next) => {
 app.post('/api/auth/login', loginLimit, h(async (req, res) => {
   const r = await login(req.body.username, req.body.password, req);
   setSessionCookie(req, res, r.token);
-  return r;
+  // Remember the clinic for this browser so the shared address opens the right clinic next time
+  const t = context().tenant;
+  if (t) res.cookie(CLINIC_COOKIE, t.slug, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: 180 * 86400000 });
+  return { ...r, clinic: t ? { code: t.slug, name: t.name } : null };
 }));
 
 app.use('/api/public', publicRoutes);
+app.post('/api/auth/forgot', loginLimit, h(async (req) => {
+  const linkFor = async (token) => (context().tenant ? clinicUrl(`/reset-password?t=${token}`) : `${req.protocol}://${req.get('host')}/reset-password?t=${token}`);
+  await requestPasswordReset(req.body.login, req, { sendEmail, linkFor });
+  return { ok: true, message: 'If that account has an email address on file, a reset link is on its way. It works for 30 minutes.' };
+}));
+app.post('/api/auth/reset', loginLimit, h(async (req) => completePasswordReset(req.body.token, req.body.password, req)));
 app.use('/api', authMiddleware);
 app.post('/api/auth/mfa', h(async (req) => verifyMfa(req, req.body.code)));
 app.get('/api/auth/me', h(async (req) => ({ ...req.user, permissions: [...req.user.permissions], idleMinutes: (await securityPolicy()).idleMinutes })));
@@ -94,14 +107,37 @@ if (fs.existsSync(webDist)) {
   app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
 }
 
-app.use((err, _req, res, _next) => {
+const DB_HINTS = {
+  ER_BAD_FIELD_ERROR: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
+  ER_NO_SUCH_TABLE: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
+  ER_DBACCESS_DENIED_ERROR: 'The SmileOS database user is not allowed to create clinic databases. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ER_ACCESS_DENIED_ERROR: 'SmileOS cannot sign in to MySQL. Check DB_USER / DB_PASSWORD in /etc/smileos.env.',
+  ER_TABLEACCESS_DENIED_ERROR: 'The SmileOS database user is missing permissions. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ECONNREFUSED: 'The database server is not running. Start it with: sudo systemctl start mysql',
+};
+app.use((err, req, res, _next) => {
   const status = err.status || (err.code === 'ER_DUP_ENTRY' ? 409 : 500);
-  if (status === 500) console.error(err);
+  if (status === 500) {
+    err.ref = Math.random().toString(36).slice(2, 8).toUpperCase();
+    console.error(`[error ${err.ref}] ${req.method} ${req.originalUrl}:`, err);
+    const hint = DB_HINTS[err.code];
+    return res.status(500).json({ error: hint ? `${hint} (ref ${err.ref})` : `Something went wrong (ref ${err.ref}). Ask your administrator to check the server log for this reference.` });
+  }
   res.status(status).json({ error: status === 500 ? 'Something went wrong. The error was logged.' : (err.code === 'ER_DUP_ENTRY' ? 'That value already exists' : err.message) });
 });
 
 if (process.argv[1] && process.argv[1].endsWith('index.js')) {
   const port = Number(process.env.PORT || 4000);
+  // Bring every database up to date before accepting requests (safe to run on every start)
+  try {
+    const { migrateClinicDb, migrateControlDb } = await import('./migrations.js');
+    const { CONTROL_DB, DEFAULT_DB } = await import('./db.js');
+    const { cq } = await import('./tenancy.js');
+    await migrateControlDb(CONTROL_DB);
+    if (process.env.MULTI_TENANT !== '1') await migrateClinicDb(DEFAULT_DB);
+    for (const t of await cq("SELECT db_name FROM tenant WHERE status<>'deleted'")) await migrateClinicDb(t.db_name);
+    console.log('Databases are up to date');
+  } catch (e) { console.error('Database update at startup failed:', e.message); }
   app.listen(port, () => console.log(`SmileOS server on http://localhost:${port}`));
   startAutomation();
 }

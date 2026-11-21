@@ -185,3 +185,38 @@ export async function mfaDisable(req, password) {
   await audit(u.id, 'MfaDisabled', null, 'Two-factor sign-in turned off', req);
 }
 
+
+// ===== Self-service password reset by email =====
+// The answer is always the same whether or not the account exists (no account discovery).
+// Links are single-use, expire after 30 minutes, and only their hash is stored.
+export const RESET_MINUTES = 30;
+export async function requestPasswordReset(login, req, { sendEmail, linkFor }) {
+  const key = String(login || '').trim();
+  if (!key) return;
+  const u = await one('SELECT * FROM app_user WHERE (username=? OR (email IS NOT NULL AND LOWER(email)=LOWER(?))) AND is_hidden=0 LIMIT 1', [key, key]);
+  if (!u || !u.email) { await audit(u?.id || null, 'PasswordResetRequest', null, `Reset requested for "${key.slice(0, 60)}" – ${u ? 'no email on file' : 'unknown account'}`, req); return; }
+  const recent = await one('SELECT COUNT(*) n FROM password_reset WHERE user_id=? AND created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)', [u.id]);
+  if (recent.n >= 3) { await audit(u.id, 'PasswordResetRequest', null, 'Too many reset requests – ignored', req); return; }
+  const token = randomToken(32);
+  await q('INSERT INTO password_reset (id, user_id, expires_at, ip) VALUES (?,?,DATE_ADD(NOW(), INTERVAL ? MINUTE),?)', [sha256(token), u.id, RESET_MINUTES, ip(req)]);
+  const link = await linkFor(token);
+  await sendEmail({
+    to: u.email, subject: 'Reset your SmileOS password', kind: 'password_reset',
+    body: `Hello ${u.full_name},\n\nSomeone asked to reset the password for your SmileOS account "${u.username}".\nTo choose a new password, open this link within ${RESET_MINUTES} minutes:\n\n${link}\n\nIf this was not you, ignore this email and tell your clinic administrator. Your password has not changed.`,
+  });
+  await audit(u.id, 'PasswordResetRequest', null, 'Reset link emailed', req);
+}
+export async function completePasswordReset(token, next, req) {
+  const r = await one('SELECT * FROM password_reset WHERE id=?', [sha256(String(token || ''))]);
+  if (!r || r.used_at || new Date(r.expires_at.replace(' ', 'T')) < new Date()) throw new HttpError(400, 'This reset link is invalid or has expired. Please request a new one.');
+  const u = await one('SELECT * FROM app_user WHERE id=? AND is_hidden=0', [r.user_id]);
+  if (!u) throw new HttpError(400, 'This reset link is invalid or has expired. Please request a new one.');
+  const pol = await securityPolicy();
+  assertStrongPassword(next, { username: u.username, minLength: pol.minLength });
+  if (await bcrypt.compare(String(next), u.password_hash)) throw new HttpError(400, 'Choose a password different from your old one');
+  await q('UPDATE app_user SET password_hash=?, must_change_password=0, failed_logins=0, locked_until=NULL, password_changed_at=NOW() WHERE id=?', [await bcrypt.hash(next, BCRYPT_COST), u.id]);
+  await q('UPDATE password_reset SET used_at=NOW() WHERE user_id=? AND used_at IS NULL', [u.id]);
+  await q('DELETE FROM user_session WHERE user_id=?', [u.id]);
+  await audit(u.id, 'PasswordChanged', null, 'Password reset with emailed link; all sessions signed out', req);
+  return { username: u.username };
+}

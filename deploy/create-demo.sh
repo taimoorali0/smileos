@@ -6,4 +6,4 @@ cd /opt/smileos/server
 set -a; source /etc/smileos.env; set +a
 npm ci >/dev/null
 sudo -E -u smileos node src/create-demo.js
-echo "Demo clinic: https://demo.${BASE_DOMAIN}"
+echo "Demo clinic: https://${BASE_DOMAIN}  – clinic code: demo"

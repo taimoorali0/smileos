@@ -4,9 +4,9 @@
 # Usage:
 #   sudo CF_API_TOKEN=xxxx bash install-ubuntu.sh smileos.marg101.com you@email.com
 #
-# Clinics get their own address: <clinic>.smileos.marg101.com, the admin console is at
-# https://smileos.marg101.com/superadmin. CF_API_TOKEN (Cloudflare token with "Edit zone DNS")
-# lets the installer get one HTTPS certificate for the domain and all clinic subdomains.
+# Everyone uses https://smileos.marg101.com; staff enter their clinic code at sign-in.
+# Admin console: https://smileos.marg101.com/superadmin. CF_API_TOKEN is optional (only for
+# separate clinic subdomains with a wildcard certificate).
 set -euo pipefail
 
 DOMAIN="${1:-}"
@@ -32,12 +32,7 @@ id smileos >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib
 systemctl enable --now mysql
 if [[ ! -f /etc/smileos.env ]]; then
   DB_PASS=$(openssl rand -hex 16)
-  mysql -u root <<SQL
-CREATE USER IF NOT EXISTS 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';
-ALTER USER 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL ON \`smileos%\`.* TO 'smileos'@'localhost';
-FLUSH PRIVILEGES;
-SQL
+  mysql -u root -e "CREATE USER IF NOT EXISTS 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}'; ALTER USER 'smileos'@'localhost' IDENTIFIED BY '${DB_PASS}';"
   cat > /etc/smileos.env <<ENV
 NODE_ENV=production
 MULTI_TENANT=1
@@ -55,6 +50,14 @@ UPLOAD_DIR=/var/lib/smileos/uploads
 ENV
   chmod 600 /etc/smileos.env
 fi
+# Settings from an earlier install may lack the multi-clinic options: add any that are missing
+grep -q '^MULTI_TENANT=' /etc/smileos.env || echo 'MULTI_TENANT=1' >> /etc/smileos.env
+grep -q '^BASE_DOMAIN=' /etc/smileos.env || echo "BASE_DOMAIN=${DOMAIN}" >> /etc/smileos.env
+grep -q '^CONTROL_DB=' /etc/smileos.env || echo 'CONTROL_DB=smileos_control' >> /etc/smileos.env
+grep -q '^APP_KEY=' /etc/smileos.env || echo "APP_KEY=$(openssl rand -hex 32)" >> /etc/smileos.env
+grep -q '^NODE_ENV=' /etc/smileos.env || echo 'NODE_ENV=production' >> /etc/smileos.env
+# Always (re)apply: the app must be able to create one database per clinic (smileos_t_<clinic>)
+mysql -u root -e "GRANT ALL ON \`smileos%\`.* TO 'smileos'@'localhost'; FLUSH PRIVILEGES;"
 [[ -f /etc/smileos-backup.key ]] || { openssl rand -hex 32 > /etc/smileos-backup.key; chmod 600 /etc/smileos-backup.key; }
 
 echo "==> Downloading and building SmileOS"
@@ -97,7 +100,7 @@ if [[ -n "${CF_API_TOKEN:-}" ]]; then
   echo "dns_cloudflare_api_token = ${CF_API_TOKEN}" > /etc/smileos-cloudflare.ini; chmod 600 /etc/smileos-cloudflare.ini
   certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/smileos-cloudflare.ini -d "$DOMAIN" -d "*.$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive && CERT_OK=1
 else
-  echo "!! CF_API_TOKEN not given: getting a certificate for ${DOMAIN} only. Clinic subdomains need the wildcard certificate (see deploy/README.md)."
+  echo "==> Certificate for ${DOMAIN} (clinics use this one address with a clinic code)"
   systemctl stop nginx || true
   certbot certonly --standalone -d "$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive && CERT_OK=1
   systemctl start nginx
@@ -156,6 +159,6 @@ chmod 700 /etc/cron.daily/smileos-backup
 echo
 echo "SmileOS is installed."
 echo "  1. Create your administrator:   sudo bash ${APP_DIR}/deploy/create-superadmin.sh"
-echo "  2. Optional demo clinic:         sudo bash ${APP_DIR}/deploy/create-demo.sh   (https://demo.${DOMAIN})"
+echo "  2. Optional demo clinic:         sudo bash ${APP_DIR}/deploy/create-demo.sh   (clinic code: demo)"
 echo "  3. Sign in at https://${DOMAIN}/superadmin and create clinics."
 echo "  Backup key: /etc/smileos-backup.key  – copy it somewhere safe; backups cannot be restored without it."

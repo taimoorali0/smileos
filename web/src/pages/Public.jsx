@@ -2,8 +2,14 @@
 import React, { useEffect, useState } from 'react';
 import FormRenderer from '../components/FormRenderer.jsx';
 
+// Patient pages are opened with ?clinic=<code>; keep it for this visit and send it with every request
+const clinicCode = (() => {
+  const c = new URLSearchParams(window.location.search).get('clinic');
+  try { if (c) sessionStorage.setItem('smileos.pclinic', c.toLowerCase()); return (c || sessionStorage.getItem('smileos.pclinic') || '').toLowerCase(); } catch { return (c || '').toLowerCase(); }
+})();
+const withClinic = (path) => (clinicCode ? `${path}${path.includes('?') ? '&' : '?'}clinic=${clinicCode}` : path);
 const papi = async (method, url, body, token) => {
-  const res = await fetch('/api/public' + url, { method, headers: { 'content-type': 'application/json', ...(token ? { 'x-portal-token': token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch('/api/public' + url, { method, headers: { 'content-type': 'application/json', ...(clinicCode ? { 'x-clinic': clinicCode } : {}), ...(token ? { 'x-portal-token': token } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Something went wrong');
   return data;
@@ -20,9 +26,9 @@ function Frame({ practice, children }) {
           <img src="/icon.svg" width="36" height="36" alt="" />
           <strong style={{ fontSize: 18 }}>{practice?.name || 'Dental office'}</strong>
           <div className="grow" />
-          <a className="btn sm" href="/register">New patient</a>
-          <a className="btn sm" href="/book">Book online</a>
-          <a className="btn sm" href="/portal">Patient portal</a>
+          <a className="btn sm" href={withClinic('/register')}>New patient</a>
+          <a className="btn sm" href={withClinic('/book')}>Book online</a>
+          <a className="btn sm" href={withClinic('/portal')}>Patient portal</a>
         </div>
       </header>
       <main style={{ maxWidth: 860, margin: '0 auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>{children}</main>
@@ -57,7 +63,7 @@ export function Booking() {
         <div className="card col">
           <h2>You're booked!</h2>
           <p style={{ margin: 0 }}>We'll see you on <strong>{niceDate(done.date)} at {niceTime(done.time)}</strong>. A confirmation text is on its way.</p>
-          <a className="btn primary" href="/portal" style={{ alignSelf: 'flex-start' }}>Open patient portal</a>
+          <a className="btn primary" href={withClinic('/portal')} style={{ alignSelf: 'flex-start' }}>Open patient portal</a>
         </div>
       ) : (
         <>
@@ -106,7 +112,7 @@ export function Portal() {
   useEffect(() => {
     papi('GET', '/practice').then(setPractice).catch(() => {});
     const t = new URLSearchParams(window.location.search).get('t');
-    if (t) { papi('POST', '/portal/login', { token: t }).then((r) => { sessionStorage.setItem('smileos.portal', r.token); setToken(r.token); window.history.replaceState(null, '', '/portal'); load(r.token); }).catch((e) => setErr(e.message)); }
+    if (t) { papi('POST', '/portal/login', { token: t }).then((r) => { sessionStorage.setItem('smileos.portal', r.token); setToken(r.token); window.history.replaceState(null, '', withClinic('/portal')); load(r.token); }).catch((e) => setErr(e.message)); }
     else if (token) load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const login = async (e) => {
@@ -135,7 +141,7 @@ export function Portal() {
       <div className="grid two">
         <div className="card col">
           <h2>Upcoming appointments</h2>
-          {!me.appointments.length && <span className="muted">No upcoming appointments. <a href="/book">Book online</a></span>}
+          {!me.appointments.length && <span className="muted">No upcoming appointments. <a href={withClinic('/book')}>Book online</a></span>}
           {me.appointments.map((a) => (
             <div key={a.id} className="card" style={{ padding: 12, background: 'var(--surface-2)' }}>
               <strong>{new Date(a.apt_datetime.replace(' ', 'T')).toLocaleString(undefined, { weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' })}</strong>
@@ -201,7 +207,7 @@ export function Register() {
         <div className="card col">
           <h2>Thank you, {f.first_name}!</h2>
           <p style={{ margin: 0 }}>Your details were sent securely to {practice?.name || 'the clinic'}. You can now book your first visit.</p>
-          <a className="btn primary" href="/book" style={{ alignSelf: 'flex-start' }}>Book an appointment</a>
+          <a className="btn primary" href={withClinic('/book')} style={{ alignSelf: 'flex-start' }}>Book an appointment</a>
         </div>
       ) : (
         <form className="col" onSubmit={submit}>

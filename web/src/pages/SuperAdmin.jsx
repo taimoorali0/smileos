@@ -93,7 +93,7 @@ function Console({ me, onLogout }) {
   const shown = (tenants || []).filter((t) => !q || `${t.name} ${t.slug}`.toLowerCase().includes(q.toLowerCase()));
   const total = (k) => (tenants || []).reduce((s, t) => s + Number(t.stats?.[k] || 0), 0);
   const host = window.location.host.replace(/^www\./, '');
-  const clinicUrl = (t) => `${window.location.protocol}//${t.slug}.${host}`;
+  const clinicUrl = (t) => `${window.location.origin}/?clinic=${t.slug}`;
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
       <header className="topbar">
@@ -118,21 +118,21 @@ function Console({ me, onLogout }) {
             </div>
             <div className="table-wrap">
               <table className="t">
-                <thead><tr><th>Clinic</th><th>Address</th><th>Status</th><th>Plan</th><th>Users</th><th>Patients</th><th>Last sign-in</th><th /></tr></thead>
+                <thead><tr><th>Clinic</th><th>Clinic code</th><th>Status</th><th>Plan</th><th>Users</th><th>Patients</th><th>Last sign-in</th><th /></tr></thead>
                 <tbody>
                   {!tenants && <tr><td colSpan={8} className="empty">Loading…</td></tr>}
                   {tenants && !shown.length && <tr><td colSpan={8} className="empty">No clinics yet. Create the first one.</td></tr>}
                   {shown.map((t) => (
                     <tr key={t.id}>
                       <td><strong>{t.name}</strong><div className="muted small">{t.admin_email || ''}</div></td>
-                      <td><a href={clinicUrl(t)} target="_blank" rel="noreferrer">{t.slug}.{host}</a></td>
+                      <td><code>{t.slug}</code><div><a className="small" href={clinicUrl(t)} target="_blank" rel="noreferrer">Open sign-in</a></div></td>
                       <td><span className={`badge ${t.status === 'active' ? 'ok' : 'warn'}`}>{t.status}</span></td>
                       <td>{t.plan}</td><td>{t.stats?.users ?? '—'}</td><td>{t.stats?.patients ?? '—'}</td>
                       <td className="small">{t.stats?.last_login ? t.stats.last_login.slice(0, 16) : 'Never'}</td>
                       <td>
                         <div className="row" style={{ flexWrap: 'nowrap' }}>
                           <button type="button" className="btn sm" onClick={() => setEdit({ ...t })}>Edit</button>
-                          <button type="button" className="btn sm" onClick={async () => { const r = await act(() => sapi('POST', `/tenants/${t.id}/reset-admin`, { username: 'admin' })); if (r) setSecret({ title: `New admin password – ${t.name}`, url: clinicUrl(t), username: r.username, password: r.tempPassword }); }}>Reset admin</button>
+                          <button type="button" className="btn sm" onClick={async () => { const r = await act(() => sapi('POST', `/tenants/${t.id}/reset-admin`, { username: 'admin' })); if (r) setSecret({ title: `New admin password – ${t.name}`, url: clinicUrl(t), code: t.slug, username: r.username, password: r.tempPassword }); }}>Reset admin</button>
                           {t.status === 'active'
                             ? <button type="button" className="btn sm danger" onClick={() => window.confirm(`Suspend ${t.name}? Their staff will be signed out and cannot sign in.`) && act(() => sapi('PUT', `/tenants/${t.id}`, { status: 'suspended' }), 'Clinic suspended')}>Suspend</button>
                             : <button type="button" className="btn sm" onClick={() => act(() => sapi('PUT', `/tenants/${t.id}`, { status: 'active' }), 'Clinic activated')}>Activate</button>}
@@ -152,13 +152,14 @@ function Console({ me, onLogout }) {
           </table></div></div>
         )}
       </main>
-      {create && <CreateClinic host={host} onClose={() => setCreate(false)} onCreated={(r, name) => { setCreate(false); load(); setSecret({ title: `${name} is ready`, url: `${window.location.protocol}//${r.slug}.${host}`, username: r.adminUsername, password: r.tempPassword }); }} />}
+      {create && <CreateClinic host={host} onClose={() => setCreate(false)} onCreated={(r, name) => { setCreate(false); load(); setSecret({ title: `${name} is ready`, url: `${window.location.origin}/?clinic=${r.slug}`, code: r.slug, username: r.adminUsername, password: r.tempPassword }); }} />}
       {edit && <EditClinic t={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); notify('Saved'); }} notify={notify} />}
       {secret && (
         <Modal title={secret.title} onClose={() => setSecret(null)} footer={<button type="button" className="btn primary" onClick={() => setSecret(null)}>Done</button>}>
           <div className="alert">This temporary password is shown only once. Give it to the clinic admin securely (in person or by phone, not by email with the address). They must change it at first sign-in.</div>
           <div className="form-grid">
-            <div><div className="muted small">Clinic address</div><a href={secret.url} target="_blank" rel="noreferrer"><strong>{secret.url}</strong></a></div>
+            <div><div className="muted small">Sign-in address</div><a href={secret.url} target="_blank" rel="noreferrer"><strong>{window.location.host}</strong></a></div>
+            {secret.code && <div><div className="muted small">Clinic code</div><strong>{secret.code}</strong></div>}
             <div><div className="muted small">Username</div><strong>{secret.username}</strong></div>
             <div><div className="muted small">Temporary password</div><code style={{ fontSize: 18, fontWeight: 800 }}>{secret.password}</code></div>
           </div>
@@ -185,7 +186,7 @@ function CreateClinic({ host, onClose, onCreated }) {
       {err && <div className="alert danger" role="alert">{err}</div>}
       <div className="form-grid">
         <label className="field">Clinic name<input className="input" value={f.name} onChange={set('name')} autoFocus /></label>
-        <label className="field">Web address<div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}><input className="input" value={f.slug} onChange={(e) => { setTouched(true); setF({ ...f, slug: e.target.value.toLowerCase() }); }} /><span className="muted small">.{host}</span></div></label>
+        <label className="field">Clinic code (staff type this at sign-in)<input className="input" value={f.slug} onChange={(e) => { setTouched(true); setF({ ...f, slug: e.target.value.toLowerCase() }); }} /></label>
         <label className="field">Admin name<input className="input" value={f.adminName} onChange={set('adminName')} /></label>
         <label className="field">Admin email<input className="input" type="email" value={f.adminEmail} onChange={set('adminEmail')} /></label>
         <label className="field">Phone<input className="input" value={f.phone} onChange={set('phone')} /></label>
@@ -212,7 +213,7 @@ function EditClinic({ t, onClose, onSaved, notify }) {
       <label className="field">Internal note<textarea className="input" value={f.note || ''} onChange={set('note')} /></label>
       <div className="card col" style={{ padding: 12, borderColor: 'var(--danger)' }}>
         <h3 style={{ color: 'var(--danger)' }}>Delete clinic</h3>
-        <span className="muted small">Type <strong>{t.slug}</strong> to confirm. Patient records must normally be kept for years; only erase data if you have exported it or the clinic asked for it.</span>
+        <span className="muted small">Type the clinic code <strong>{t.slug}</strong> to confirm. Patient records must normally be kept for years; only erase data if you have exported it or the clinic asked for it.</span>
         <input className="input" value={del} onChange={(e) => setDel(e.target.value)} aria-label="Type the clinic address to confirm" />
         <label className="check"><input type="checkbox" checked={drop} onChange={(e) => setDrop(e.target.checked)} />Also permanently erase all of this clinic's data</label>
         <button type="button" className="btn danger" disabled={del !== t.slug} onClick={async () => { try { await sapi('DELETE', `/tenants/${t.id}`, { confirm: del, dropData: drop }); onSaved(); } catch (e) { notify(e.message, true); } }}>Delete clinic</button>

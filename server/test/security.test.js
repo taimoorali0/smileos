@@ -94,3 +94,21 @@ test('share links with QR codes, invite and online registration', async () => {
   const found = (await call('GET', '/patients?search=Sam Lee', null, adminToken)).data;
   assert.equal(found.length, 1);
 });
+
+test('forgot password: same answer for any account, emailed one-time link, strong new password', async () => {
+  const groups = (await call('GET', '/setup/groups', null, adminToken)).data;
+  const uname = `reset${Date.now() % 100000}`;
+  await call('POST', '/setup/users', { username: uname, full_name: 'Reset Tester', email: `${uname}@example.com`, group_id: groups.find((g) => g.name === 'Billing').id }, adminToken);
+  const unknown = await call('POST', '/auth/forgot', { login: 'nobody-here' });
+  const known = await call('POST', '/auth/forgot', { login: `${uname}@example.com` });
+  assert.equal(unknown.status, 200); assert.equal(known.data.message, unknown.data.message, 'no account discovery');
+  const mail = (await q("SELECT body FROM message_log WHERE kind='password_reset' AND to_addr=? ORDER BY id DESC LIMIT 1", [`${uname}@example.com`]))[0];
+  const token = mail.body.match(/reset-password\?t=([\w-]+)/)[1];
+  assert.equal((await call('POST', '/auth/reset', { token, password: 'weak' })).status, 400);
+  assert.equal((await call('POST', '/auth/reset', { token, password: 'Fresh#Start-2026' })).status, 200);
+  assert.equal((await call('POST', '/auth/reset', { token, password: 'Other#Start-2026' })).status, 400, 'link is single-use');
+  const l = await call('POST', '/auth/login', { username: uname, password: 'Fresh#Start-2026' });
+  assert.equal(l.status, 200); assert.equal(l.data.user.mustChangePassword, false);
+  const row = (await q('SELECT id FROM password_reset WHERE id=?', [token]))[0];
+  assert.equal(row, undefined, 'only the hash is stored');
+});
