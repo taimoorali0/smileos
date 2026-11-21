@@ -1,0 +1,50 @@
+-- SmileOS control database: super admins and clinics (tenants)
+CREATE TABLE IF NOT EXISTS super_admin (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(160) NOT NULL UNIQUE,
+  full_name VARCHAR(120) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  mfa_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  mfa_secret VARCHAR(255) NULL,
+  failed_logins INT NOT NULL DEFAULT 0,
+  locked_until DATETIME NULL,
+  last_login_at DATETIME NULL,
+  is_disabled TINYINT(1) NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS super_session (
+  id CHAR(64) PRIMARY KEY,
+  admin_id INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL,
+  ip VARCHAR(64), user_agent VARCHAR(255),
+  mfa_pending TINYINT(1) NOT NULL DEFAULT 0,
+  FOREIGN KEY (admin_id) REFERENCES super_admin(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS tenant (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(40) NOT NULL UNIQUE,         -- web address: <slug>.<BASE_DOMAIN>
+  name VARCHAR(120) NOT NULL,
+  db_name VARCHAR(64) NOT NULL UNIQUE,
+  status ENUM('active','suspended','deleted') NOT NULL DEFAULT 'active',
+  admin_email VARCHAR(160),
+  phone VARCHAR(40), address VARCHAR(200),
+  plan VARCHAR(40) NOT NULL DEFAULT 'standard',
+  note VARCHAR(500),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS super_audit (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  admin_id INT NULL,
+  action VARCHAR(60) NOT NULL,
+  tenant_id INT NULL,
+  detail VARCHAR(1000),
+  ip VARCHAR(64),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

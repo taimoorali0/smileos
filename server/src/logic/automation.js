@@ -1,7 +1,8 @@
 // Background jobs: appointment reminders, recall reminders, thank-you messages, imaging folder import.
 import fs from 'node:fs';
 import path from 'node:path';
-import { q, one } from '../db.js';
+import { q, one, withDb } from '../db.js';
+import { activeDatabases } from '../tenancy.js';
 import { getSetting, renderTemplate } from './settings.js';
 import { sendSms, sendEmail } from './messaging.js';
 
@@ -75,9 +76,16 @@ export async function runImagingImport() {
 }
 
 export function startAutomation() {
+  // Runs for every active clinic, each inside its own database
   const tick = async () => {
-    try { await runReminders(); } catch (e) { console.error('Reminders failed:', e.message); }
-    try { await runImagingImport(); } catch (e) { console.error('Imaging import failed:', e.message); }
+    let dbs = [];
+    try { dbs = await activeDatabases(); } catch (e) { console.error('Could not list clinics:', e.message); }
+    for (const { db } of dbs) {
+      await withDb(db, async () => {
+        try { await runReminders(); } catch (e) { console.error(`[${db}] reminders failed:`, e.message); }
+        try { await runImagingImport(); } catch (e) { console.error(`[${db}] imaging import failed:`, e.message); }
+      });
+    }
   };
   setTimeout(tick, 5000);
   return setInterval(tick, 60 * 1000);

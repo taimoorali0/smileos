@@ -1,10 +1,14 @@
 import 'dotenv/config';
 import express from 'express';
-import cors from 'cors';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
 import { h } from './http.js';
-import { login, authMiddleware, need } from './auth.js';
+import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
+import { q } from './db.js';
+import { tenantMiddleware } from './tenancy.js';
+import superRoutes from './routes/super.js';
 import setup from './routes/setup.js';
 import patients from './routes/patients.js';
 import appointments from './routes/appointments.js';
@@ -16,16 +20,62 @@ import publicRoutes from './routes/public.js';
 import { startAutomation, runReminders, runImagingImport } from './logic/automation.js';
 
 export const app = express();
-app.use(cors());
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: { directives: {
+    defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"],
+    fontSrc: ["'self'"], imgSrc: ["'self'", 'data:', 'blob:'], connectSrc: ["'self'"], frameSrc: ["'self'"],
+    mediaSrc: ["'self'", 'blob:'], objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"], baseUri: ["'self'"],
+    upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
+  } },
+  hsts: process.env.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true } : false,
+  referrerPolicy: { policy: 'no-referrer' },
+  crossOriginEmbedderPolicy: false,
+}));
+app.use(cookieParser());
+// No caching of API responses (they contain patient data)
+app.use('/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache'); next(); });
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: false }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, name: 'SmileOS' }));
-app.post('/api/auth/login', h(async (req) => login(req.body.username, req.body.password)));
+app.use('/api/super', superRoutes);
+app.use('/api', tenantMiddleware);
+
+// Login is rate limited per IP on top of the per-account lockout
+const loginHits = new Map();
+const loginLimit = (req, _res, next) => {
+  const now = Date.now(); const k = req.ip; const arr = (loginHits.get(k) || []).filter((t) => now - t < 15 * 60000); arr.push(now); loginHits.set(k, arr);
+  next(arr.length > 30 ? Object.assign(new Error('Too many sign-in attempts from this network. Wait 15 minutes.'), { status: 429 }) : undefined);
+};
+app.post('/api/auth/login', loginLimit, h(async (req, res) => {
+  const r = await login(req.body.username, req.body.password, req);
+  setSessionCookie(req, res, r.token);
+  return r;
+}));
 
 app.use('/api/public', publicRoutes);
 app.use('/api', authMiddleware);
-app.get('/api/auth/me', h(async (req) => ({ ...req.user, permissions: [...req.user.permissions] })));
+app.post('/api/auth/mfa', h(async (req) => verifyMfa(req, req.body.code)));
+app.get('/api/auth/me', h(async (req) => ({ ...req.user, permissions: [...req.user.permissions], idleMinutes: (await securityPolicy()).idleMinutes })));
+app.post('/api/auth/logout', h(async (req, res) => {
+  await q('DELETE FROM user_session WHERE id=?', [req.session.id]);
+  await audit(req.session.user_id, 'Logout', null, 'Signed out', req);
+  res.clearCookie(COOKIE, { path: '/' });
+  return { ok: true };
+}));
+app.post('/api/auth/password', h(async (req) => { await changePassword(req, req.body.current, req.body.next); return { ok: true }; }));
+app.post('/api/auth/mfa/setup', h(async (req) => mfaBegin(req)));
+app.post('/api/auth/mfa/confirm', h(async (req) => { await mfaConfirm(req, req.body.code); return { ok: true }; }));
+app.post('/api/auth/mfa/disable', h(async (req) => { await mfaDisable(req, req.body.password); return { ok: true }; }));
+app.get('/api/auth/sessions', h(async (req) => (await q('SELECT id, created_at, last_seen_at, ip, user_agent FROM user_session WHERE user_id=? AND mfa_pending=0 ORDER BY last_seen_at DESC', [req.user.id]))
+  .map((s) => ({ ...s, id: s.id.slice(0, 12), current: s.id === req.session.id }))));
+app.post('/api/auth/sessions/revoke-others', h(async (req) => {
+  await q('DELETE FROM user_session WHERE user_id=? AND id<>?', [req.user.id, req.session.id]);
+  await audit(req.user.id, 'Logout', null, 'Signed out all other devices', req);
+  return { ok: true };
+}));
 app.use('/api/setup', setup);
 app.use('/api/patients', need('FamilyModule'), patients);
 app.use('/api/appointments', need('AppointmentsModule'), appointments);
@@ -47,7 +97,7 @@ if (fs.existsSync(webDist)) {
 app.use((err, _req, res, _next) => {
   const status = err.status || (err.code === 'ER_DUP_ENTRY' ? 409 : 500);
   if (status === 500) console.error(err);
-  res.status(status).json({ error: status === 500 ? 'Server error' : err.message, detail: status === 409 && err.code ? 'Duplicate value' : undefined });
+  res.status(status).json({ error: status === 500 ? 'Something went wrong. The error was logged.' : (err.code === 'ER_DUP_ENTRY' ? 'That value already exists' : err.message) });
 });
 
 if (process.argv[1] && process.argv[1].endsWith('index.js')) {

@@ -14,7 +14,7 @@ export default function Imaging() {
   const fileRef = useRef();
   if (!patient) return <NeedPatient />;
   const cats = lookups.defs('ImageCat');
-  const url = (d) => `/api/imaging/file/${d.id}?token=${encodeURIComponent(getToken())}`;
+  const url = (d) => `/api/imaging/file/${d.id}`;
   const shown = (docs || []).filter((d) => !cat || String(d.category_id) === String(cat));
   const cur = docs?.find((d) => d.id === sel);
 

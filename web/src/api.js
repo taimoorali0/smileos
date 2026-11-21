@@ -1,25 +1,29 @@
-// Small fetch wrapper for the SmileOS API
-let token = localStorage.getItem('smileos.token') || '';
-export const setToken = (t) => { token = t; t ? localStorage.setItem('smileos.token', t) : localStorage.removeItem('smileos.token'); };
-export const getToken = () => token;
+// Fetch wrapper for the SmileOS API. Sessions use a secure httpOnly cookie set by the server;
+// the X-SmileOS header proves requests come from this app (CSRF protection).
+let onUnauthorized = null;
+export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+// Kept for older callers; sessions are cookie-based now
+export const setToken = () => {};
+export const getToken = () => '';
 
-export async function api(method, url, body) {
+export async function api(method, url, body, opts = {}) {
   const isForm = body instanceof FormData;
   const res = await fetch('/api' + url, {
     method,
-    headers: { ...(isForm ? {} : { 'content-type': 'application/json' }), ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    credentials: 'same-origin',
+    headers: { 'x-smileos': '1', ...(isForm ? {} : { 'content-type': 'application/json' }), ...(opts.background ? { 'x-smileos-background': '1' } : {}) },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
   });
   let data = null;
   try { data = await res.json(); } catch { /* empty */ }
-  if (res.status === 401 && url !== '/auth/login') { setToken(''); window.location.reload(); }
-  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  if (res.status === 401 && !url.startsWith('/auth/') && onUnauthorized) onUnauthorized(data?.error);
+  if (!res.ok) throw Object.assign(new Error(data?.error || `Request failed (${res.status})`), { status: res.status, data });
   return data;
 }
 export const get = (u) => api('GET', u);
 export const post = (u, b) => api('POST', u, b || {});
 export const put = (u, b) => api('PUT', u, b || {});
-export const del = (u) => api('DELETE', u);
+export const del = (u, b) => api('DELETE', u, b);
 
 export const money = (n) => (Number(n) || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 export const fmtDate = (d) => (d ? new Date(d.length <= 10 ? d + 'T00:00:00' : d.replace(' ', 'T')).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
