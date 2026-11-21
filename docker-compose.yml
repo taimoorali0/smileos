@@ -1,0 +1,37 @@
+# Clinic server install:  docker compose up -d   then open http://<server-ip>:4000
+# Load demo data once (optional):  docker compose exec app node db/seed.js
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smileos
+      MYSQL_USER: smileos
+      MYSQL_PASSWORD: ${DB_PASSWORD:-change-this-password}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-this-root-password}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 20
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_USER: smileos
+      DB_PASSWORD: ${DB_PASSWORD:-change-this-password}
+      DB_NAME: smileos
+      JWT_SECRET: ${JWT_SECRET:-change-this-to-a-long-random-string}
+    ports:
+      - "4000:4000"
+    volumes:
+      - uploads:/data/uploads
+volumes:
+  mysql-data:
+  uploads:

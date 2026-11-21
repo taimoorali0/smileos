@@ -1,0 +1,10 @@
+{
+  "name": "SmileOS",
+  "short_name": "SmileOS",
+  "description": "Dental practice management",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F3F6FB",
+  "theme_color": "#10265F",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
