@@ -2,7 +2,9 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { q, one } from '../db.js';
 import { h, bad } from '../http.js';
-import { need, audit, PERMISSIONS } from '../auth.js';
+import { need, audit, PERMISSIONS, BCRYPT_COST, securityPolicy } from '../auth.js';
+import { assertStrongPassword } from '../security.js';
+import { tempPassword } from '../tenancy.js';
 import { crud } from './crud.js';
 
 const r = Router();
@@ -56,7 +58,7 @@ r.post('/fee-tools', need('Setup'), h(async (req) => {
 // Preferences
 r.get('/preferences', h(async () => Object.fromEntries((await q('SELECT * FROM preference')).map((p) => [p.name, p.value]))));
 r.put('/preferences', need('Setup'), h(async (req) => {
-  for (const [k, v] of Object.entries(req.body)) await q('INSERT INTO preference (name, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)', [k, String(v)]);
+  for (const [k, v] of Object.entries(req.body)) if (!['SessionIdleMinutes', 'RequireMfa', 'PasswordMinLength', 'X12Control'].includes(k)) await q('INSERT INTO preference (name, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)', [k, String(v)]);
   return { ok: true };
 }));
 
@@ -74,22 +76,50 @@ r.put('/groups/:id/permissions', need('SecurityAdmin'), h(async (req) => {
   await audit(req.user.id, 'SecurityAdmin', null, `Permissions changed for group ${req.params.id}`);
   return { ok: true };
 }));
-r.get('/users', need('SecurityAdmin'), h(async () => q('SELECT u.id, u.username, u.full_name, u.group_id, u.provider_id, u.is_hidden, g.name group_name FROM app_user u JOIN user_group g ON g.id=u.group_id ORDER BY u.username')));
+r.get('/users', need('SecurityAdmin'), h(async () => q(`SELECT u.id, u.username, u.full_name, u.email, u.group_id, u.provider_id, u.is_hidden, u.mfa_enabled, u.must_change_password,
+  u.last_login_at, (u.locked_until IS NOT NULL AND u.locked_until > NOW()) is_locked, g.name group_name FROM app_user u JOIN user_group g ON g.id=u.group_id ORDER BY u.username`)));
+// New staff get a one-time temporary password and must choose their own at first sign-in
 r.post('/users', need('SecurityAdmin'), h(async (req) => {
-  const { username, full_name, password, group_id, provider_id } = req.body;
-  if (!username || !password || password.length < 8) throw bad('Username and a password of 8+ characters are required');
-  const res = await q('INSERT INTO app_user (username, full_name, password_hash, group_id, provider_id) VALUES (?,?,?,?,?)',
-    [username, full_name || username, await bcrypt.hash(password, 10), group_id, provider_id || null]);
-  await audit(req.user.id, 'SecurityAdmin', null, `User ${username} created`);
-  return { id: res.insertId };
+  const { username, full_name, email, group_id, provider_id } = req.body;
+  if (!username || !/^[A-Za-z0-9._-]{3,40}$/.test(username)) throw bad('Username: 3–40 letters, numbers, dots, dashes');
+  if (!group_id) throw bad('Choose a role');
+  const pw = tempPassword();
+  const res = await q('INSERT INTO app_user (username, full_name, email, password_hash, group_id, provider_id, must_change_password) VALUES (?,?,?,?,?,?,1)',
+    [username, full_name || username, email || null, await bcrypt.hash(pw, BCRYPT_COST), group_id, provider_id || null]);
+  await audit(req.user.id, 'SecurityAdmin', null, `User ${username} created`, req);
+  return { id: res.insertId, tempPassword: pw };
 }));
 r.put('/users/:id', need('SecurityAdmin'), h(async (req) => {
-  const { full_name, group_id, provider_id, is_hidden, password } = req.body;
-  await q('UPDATE app_user SET full_name=?, group_id=?, provider_id=?, is_hidden=? WHERE id=?', [full_name, group_id, provider_id || null, is_hidden ? 1 : 0, req.params.id]);
-  if (password) {
-    if (password.length < 8) throw bad('Password must be 8+ characters');
-    await q('UPDATE app_user SET password_hash=? WHERE id=?', [await bcrypt.hash(password, 10), req.params.id]);
+  const { full_name, email, group_id, provider_id, is_hidden } = req.body;
+  if (Number(req.params.id) === req.user.id && is_hidden) throw bad('You cannot disable your own account');
+  await q('UPDATE app_user SET full_name=?, email=?, group_id=?, provider_id=?, is_hidden=? WHERE id=?', [full_name, email || null, group_id, provider_id || null, is_hidden ? 1 : 0, req.params.id]);
+  if (is_hidden) await q('DELETE FROM user_session WHERE user_id=?', [req.params.id]);
+  await audit(req.user.id, 'SecurityAdmin', null, `User #${req.params.id} edited${is_hidden ? ' (disabled)' : ''}`, req);
+  return { ok: true };
+}));
+r.post('/users/:id/reset', need('SecurityAdmin'), h(async (req) => {
+  const u = await one('SELECT username FROM app_user WHERE id=?', [req.params.id]);
+  if (!u) throw bad('User not found');
+  const pw = tempPassword();
+  await q('UPDATE app_user SET password_hash=?, must_change_password=1, failed_logins=0, locked_until=NULL WHERE id=?', [await bcrypt.hash(pw, BCRYPT_COST), req.params.id]);
+  if (req.body.resetMfa) await q('UPDATE app_user SET mfa_enabled=0, mfa_secret=NULL WHERE id=?', [req.params.id]);
+  await q('DELETE FROM user_session WHERE user_id=?', [req.params.id]);
+  await audit(req.user.id, 'SecurityAdmin', null, `Password reset for ${u.username}${req.body.resetMfa ? ' (+two-factor)' : ''}`, req);
+  return { tempPassword: pw };
+}));
+r.post('/users/:id/unlock', need('SecurityAdmin'), h(async (req) => {
+  await q('UPDATE app_user SET failed_logins=0, locked_until=NULL WHERE id=?', [req.params.id]);
+  await audit(req.user.id, 'SecurityAdmin', null, `User #${req.params.id} unlocked`, req);
+  return { ok: true };
+}));
+r.get('/security-policy', h(async () => securityPolicy()));
+r.put('/security-policy', need('SecurityAdmin'), h(async (req) => {
+  const idle = Math.min(60, Math.max(5, Number(req.body.idleMinutes) || 15));
+  const minLen = Math.min(32, Math.max(10, Number(req.body.minLength) || 10));
+  for (const [k, v] of [['SessionIdleMinutes', idle], ['RequireMfa', req.body.requireMfa ? 1 : 0], ['PasswordMinLength', minLen]]) {
+    await q('INSERT INTO preference (name, value) VALUES (?,?) ON DUPLICATE KEY UPDATE value=VALUES(value)', [k, String(v)]);
   }
+  await audit(req.user.id, 'SecurityAdmin', null, `Security policy: idle ${idle} min, two-factor ${req.body.requireMfa ? 'required' : 'optional'}, password ${minLen}+`, req);
   return { ok: true };
 }));
 r.get('/audit', need('AuditTrail'), h(async (req) => q(`SELECT a.*, u.username, CONCAT(p.last_name, ', ', p.first_name) patient FROM audit_log a

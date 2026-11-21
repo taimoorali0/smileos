@@ -243,52 +243,104 @@ function Schedules() {
   );
 }
 
+const ROLE_HELP = {
+  Admin: 'Everything, including users, roles and security settings',
+  Dentist: 'Clinical work, scheduling, billing (no security settings)',
+  Hygienist: 'Chart, perio, imaging and their schedule',
+  FrontDesk: 'Scheduling, patients, insurance, payments',
+  Billing: 'Accounts, claims, insurance payments, reports',
+};
 function Security() {
-  const { lookups, notify } = useApp();
+  const { lookups, notify, user } = useApp();
   const [users, reloadUsers] = useLoad('/setup/users');
   const [groups, reloadGroups] = useLoad('/setup/groups');
   const [perms] = useLoad('/setup/permissions');
+  const [policy, setPolicy] = useState(null);
   const [editU, setEditU] = useState(null);
   const [gid, setGid] = useState(null);
+  const [secret, setSecret] = useState(null);
+  useEffect(() => { get('/setup/security-policy').then(setPolicy).catch(() => {}); }, []);
   const g = groups?.find((x) => x.id === gid) || groups?.[0];
   const saveUser = async () => {
-    try { if (editU.id) await put(`/setup/users/${editU.id}`, editU); else await post('/setup/users', editU); setEditU(null); reloadUsers(); notify('User saved'); } catch (e) { notify(e.message, true); }
+    try {
+      if (editU.id) { await put(`/setup/users/${editU.id}`, editU); notify('User saved'); }
+      else { const r = await post('/setup/users', editU); setSecret({ username: editU.username, password: r.tempPassword }); }
+      setEditU(null); reloadUsers();
+    } catch (e) { notify(e.message, true); }
+  };
+  const reset = async (u, resetMfa) => {
+    if (!window.confirm(`Reset ${resetMfa ? 'password and two-factor' : 'password'} for ${u.username}? They will be signed out everywhere.`)) return;
+    try { const r = await post(`/setup/users/${u.id}/reset`, { resetMfa }); setEditU(null); setSecret({ username: u.username, password: r.tempPassword }); reloadUsers(); } catch (e) { notify(e.message, true); }
   };
   return (
-    <div className="grid two">
-      <div className="card tight">
-        <div className="row" style={{ padding: 14 }}><h2 className="grow">Users</h2><button type="button" className="btn primary" onClick={() => setEditU({ group_id: groups?.[0]?.id })}>+ Add user</button></div>
-        <Table rows={users} onRow={(u) => setEditU({ ...u, password: '' })} columns={[
-          { key: 'username', label: 'Username' }, { key: 'full_name', label: 'Name' }, { key: 'group_name', label: 'Group' }, { key: 'h', label: '', render: (u) => (u.is_hidden ? <span className="badge">Disabled</span> : '') },
-        ]} />
-      </div>
-      <div className="card col">
-        <div className="row"><h2 className="grow">Group permissions</h2>
-          <select className="input" style={{ width: 180 }} value={g?.id || ''} onChange={(e) => setGid(Number(e.target.value))} aria-label="Group">{(groups || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
-          <button type="button" className="btn sm" onClick={async () => { const name = window.prompt('New group name'); if (name) { await post('/setup/groups', { name }); reloadGroups(); } }}>+ Group</button>
-        </div>
-        {g && perms && (
-          <div className="grid three" style={{ gap: 6 }}>
-            {perms.map((p) => <Check key={p} label={p} checked={g.permissions.includes(p)} onChange={async (on) => {
-              const next = on ? [...g.permissions, p] : g.permissions.filter((x) => x !== p);
-              await put(`/setup/groups/${g.id}/permissions`, { permissions: next }); reloadGroups();
-            }} />)}
+    <>
+      {policy && (
+        <div className="card col">
+          <h2>Security policy</h2>
+          <div className="form-grid">
+            <Select label="Sign out after inactivity" value={policy.idleMinutes} onChange={(v) => setPolicy({ ...policy, idleMinutes: Number(v) })} options={[5, 10, 15, 20, 30, 60].map((n) => ({ value: n, label: `${n} minutes` }))} />
+            <Select label="Minimum password length" value={policy.minLength} onChange={(v) => setPolicy({ ...policy, minLength: Number(v) })} options={[10, 12, 14, 16].map((n) => ({ value: n, label: `${n} characters` }))} />
           </div>
-        )}
+          <Check label="Require two-factor sign-in (authenticator app) for every user" checked={policy.requireMfa} onChange={(v) => setPolicy({ ...policy, requireMfa: !!v })} />
+          <span className="muted small">Always on: accounts lock for 15 minutes after 5 wrong passwords, passwords need upper/lower case, a number and a symbol, sessions end after 12 hours, and every sign-in and patient record view is written to the audit trail.</span>
+          <div className="row"><div className="grow" /><button type="button" className="btn primary" onClick={async () => { try { await put('/setup/security-policy', policy); notify('Security policy saved'); } catch (e) { notify(e.message, true); } }}>Save policy</button></div>
+        </div>
+      )}
+      <div className="grid two">
+        <div className="card tight">
+          <div className="row" style={{ padding: 14 }}><h2 className="grow">Staff accounts</h2><button type="button" className="btn primary" onClick={() => setEditU({ group_id: groups?.find((x) => x.name === 'FrontDesk')?.id || groups?.[0]?.id })}>+ Add staff</button></div>
+          <Table rows={users} onRow={(u) => setEditU({ ...u })} columns={[
+            { key: 'username', label: 'Username', render: (u) => <><strong>{u.username}</strong><div className="muted small">{u.full_name}</div></> },
+            { key: 'group_name', label: 'Role', render: (u) => <span className="badge">{u.group_name}</span> },
+            { key: 'm', label: 'Two-factor', render: (u) => (u.mfa_enabled ? <span className="badge ok">On</span> : <span className="badge warn">Off</span>) },
+            { key: 'l', label: 'Last sign-in', render: (u) => <span className="small">{u.last_login_at ? u.last_login_at.slice(0, 16) : 'Never'}</span> },
+            { key: 's', label: '', render: (u) => (u.is_hidden ? <span className="badge">Disabled</span> : u.is_locked ? <span className="badge danger">Locked</span> : u.must_change_password ? <span className="badge warn">New password due</span> : '') },
+          ]} />
+        </div>
+        <div className="card col">
+          <div className="row"><h2 className="grow">Roles & permissions</h2>
+            <select className="input" style={{ width: 180 }} value={g?.id || ''} onChange={(e) => setGid(Number(e.target.value))} aria-label="Role">{(groups || []).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+            <button type="button" className="btn sm" onClick={async () => { const name = window.prompt('New role name'); if (name) { await post('/setup/groups', { name }); reloadGroups(); } }}>+ Role</button>
+          </div>
+          {g && <span className="muted small">{ROLE_HELP[g.name] || 'Custom role'} · Each clinic has its own roles; changes here only affect this clinic.</span>}
+          {g && perms && (
+            <div className="grid three" style={{ gap: 6 }}>
+              {perms.map((p) => <Check key={p} label={p} checked={g.permissions.includes(p)} onChange={async (on) => {
+                if (g.name === 'Admin' && p === 'SecurityAdmin' && !on && !window.confirm('Removing this from Admin can lock everyone out of security settings. Continue?')) return;
+                const next = on ? [...g.permissions, p] : g.permissions.filter((x) => x !== p);
+                await put(`/setup/groups/${g.id}/permissions`, { permissions: next }); reloadGroups();
+              }} />)}
+            </div>
+          )}
+        </div>
       </div>
       {editU && (
-        <Modal title={editU.id ? `Edit ${editU.username}` : 'Add user'} onClose={() => setEditU(null)} footer={<><button type="button" className="btn" onClick={() => setEditU(null)}>Cancel</button><button type="button" className="btn primary" onClick={saveUser}>Save</button></>}>
+        <Modal title={editU.id ? `Edit ${editU.username}` : 'Add staff'} onClose={() => setEditU(null)} footer={<>
+          {editU.id && <>
+            <button type="button" className="btn" onClick={() => reset(editU, false)}>Reset password</button>
+            {editU.mfa_enabled ? <button type="button" className="btn" onClick={() => reset(editU, true)}>Reset two-factor</button> : null}
+            {editU.is_locked ? <button type="button" className="btn" onClick={async () => { await post(`/setup/users/${editU.id}/unlock`); notify('Unlocked'); setEditU(null); reloadUsers(); }}>Unlock</button> : null}
+          </>}
+          <div className="grow" /><button type="button" className="btn" onClick={() => setEditU(null)}>Cancel</button><button type="button" className="btn primary" onClick={saveUser}>{editU.id ? 'Save' : 'Create account'}</button></>}>
           <div className="form-grid">
             <Input label="Username" value={editU.username} onChange={(v) => setEditU({ ...editU, username: v })} disabled={!!editU.id} />
             <Input label="Full name" value={editU.full_name} onChange={(v) => setEditU({ ...editU, full_name: v })} />
-            <Select label="Group" value={editU.group_id} onChange={(v) => setEditU({ ...editU, group_id: v })} options={(groups || []).map((x) => ({ value: x.id, label: x.name }))} />
-            <Select label="Linked provider" value={editU.provider_id} onChange={(v) => setEditU({ ...editU, provider_id: v })} options={lookups.providers.map((p) => ({ value: p.id, label: p.abbr }))} empty="(none)" />
-            <Input label={editU.id ? 'New password (leave empty to keep)' : 'Password (8+ characters)'} type="password" value={editU.password} onChange={(v) => setEditU({ ...editU, password: v })} />
+            <Input label="Email" type="email" value={editU.email} onChange={(v) => setEditU({ ...editU, email: v })} />
+            <Select label="Role" value={editU.group_id} onChange={(v) => setEditU({ ...editU, group_id: v })} options={(groups || []).map((x) => ({ value: x.id, label: x.name }))} />
+            <Select label="Linked provider (dentist/hygienist)" value={editU.provider_id} onChange={(v) => setEditU({ ...editU, provider_id: v })} options={lookups.providers.map((p) => ({ value: p.id, label: p.abbr }))} empty="(none)" />
           </div>
-          {editU.id && <Check label="Disabled" checked={editU.is_hidden} onChange={(v) => setEditU({ ...editU, is_hidden: v })} />}
+          {!editU.id && <span className="muted small">A one-time temporary password is created. The person must choose their own password at first sign-in.</span>}
+          {editU.id && editU.id !== user.id && <Check label="Account disabled (cannot sign in)" checked={editU.is_hidden} onChange={(v) => setEditU({ ...editU, is_hidden: v })} />}
         </Modal>
       )}
-    </div>
+      {secret && (
+        <Modal title={`Temporary password for ${secret.username}`} onClose={() => setSecret(null)} footer={<button type="button" className="btn primary" onClick={() => setSecret(null)}>Done</button>}>
+          <div className="alert">Shown only once. Give it to the person directly. They must change it when they sign in.</div>
+          <code style={{ fontSize: 22, fontWeight: 800, textAlign: 'center' }}>{secret.password}</code>
+          <button type="button" className="btn" onClick={() => navigator.clipboard?.writeText(secret.password)}>Copy</button>
+        </Modal>
+      )}
+    </>
   );
 }
 

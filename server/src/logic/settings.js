@@ -1,4 +1,4 @@
-import { one, q } from '../db.js';
+import { one, q, context } from '../db.js';
 
 /** Default config per integration. "mode: test" means nothing leaves the server; messages/files are logged only. */
 export const DEFAULTS = {
@@ -42,8 +42,15 @@ export async function renderTemplate(tpl, { patient, apt, extra = {} } = {}) {
     Practice: pref?.value || 'our office',
     Date: dt ? dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : '',
     Time: dt ? dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '',
-    BookingLink: `${portal.public_url.replace(/\/$/, '')}/book`, PortalLink: `${portal.public_url.replace(/\/$/, '')}/portal`,
+    BookingLink: `${await publicBase()}/book`, PortalLink: `${await publicBase()}/portal`, RegisterLink: `${await publicBase()}/register`,
     ...extra,
   };
   return String(tpl).replace(/\[(\w+)\]/g, (m, k) => (k in map ? String(map[k]) : m));
+}
+
+/** Public web address of the current clinic (its own subdomain in multi-clinic mode). */
+export async function publicBase() {
+  const t = context().tenant;
+  if (t) return process.env.BASE_DOMAIN ? `https://${t.slug}.${process.env.BASE_DOMAIN}` : `http://${t.slug}.localhost:${process.env.PORT || 4000}`;
+  return String((await getSetting('portal')).public_url || '').replace(/\/$/, '');
 }

@@ -161,7 +161,7 @@ function EraFiles() {
   const importEra = async (content, name) => {
     try { const r = await post('/integrations/era/import', { content, file_name: name }); setResult(r); notify(`ERA imported: ${r.results.filter((x) => x.ok).length} claim(s) posted`); setPaste(false); setText(''); reload(); } catch (e) { notify(e.message, true); }
   };
-  const download = (f) => { window.open(`/api/integrations/claim-files/${f.id}/download?token=${encodeURIComponent(getToken())}`, '_blank'); };
+  const download = (f) => { window.open(`/api/integrations/claim-files/${f.id}/download`, '_blank'); };
   return (
     <>
       <div className="card row">

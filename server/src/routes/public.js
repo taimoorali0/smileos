@@ -1,6 +1,7 @@
 // Public endpoints (no staff login): patient portal, online booking, inbound SMS.
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { sha256 } from '../security.js';
 import { q, one, tx } from '../db.js';
 import { h, bad, HttpError, today } from '../http.js';
 import { getSetting, renderTemplate } from '../logic/settings.js';
@@ -74,11 +75,32 @@ r.post('/book', limit(10, 600000), h(async (req) => {
   return { ok: true, date: slot.date, time: slot.time };
 }));
 
+// ===== New patient registration (link sent by the office, or on the clinic website) =====
+r.post('/register', limit(10, 600000), h(async (req) => {
+  const b = req.body;
+  if (!b.first_name || !b.last_name || !b.birthdate || digits(b.phone).length < 10) throw bad('Please enter your name, birthdate and mobile number');
+  if (!b.consent) throw bad('Please agree to the privacy notice');
+  const exists = await one(`SELECT id FROM patient WHERE LOWER(last_name)=LOWER(?) AND birthdate=? AND REPLACE(REPLACE(REPLACE(REPLACE(wireless_phone,'-',''),' ',''),'(',''),')','') LIKE ?`,
+    [b.last_name.trim(), b.birthdate, `%${digits(b.phone).slice(-10)}`]);
+  let pid = exists?.id;
+  if (!pid) {
+    pid = (await q(`INSERT INTO patient (last_name, first_name, birthdate, gender, wireless_phone, email, address, city, state, zip, allergies, medical_alert, status, referral_source, text_ok)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'Patient', ?, ?)`, [b.last_name.trim().slice(0, 60), b.first_name.trim().slice(0, 60), b.birthdate, ['F', 'M'].includes(b.gender) ? b.gender : 'U',
+      b.phone, b.email || null, b.address || null, b.city || null, b.state || null, b.zip || null, b.allergies || null, b.medical_alert || null, b.referral || 'Online registration', b.text_ok ? 1 : 0])).insertId;
+    for (const name of String(b.allergies || '').split(/[,;\n]/).map((x) => x.trim()).filter(Boolean)) await q("INSERT INTO medication_pat (patient_id, kind, name) VALUES (?, 'Allergy', ?)", [pid, name.slice(0, 120)]);
+    await q("INSERT IGNORE INTO recall (patient_id, recall_type, interval_months, date_due) VALUES (?, 'Prophy', 6, CURDATE())", [pid]);
+  }
+  const ins = b.insurance_carrier ? `Insurance: ${b.insurance_carrier} · member ${b.insurance_member_id || '?'} · subscriber ${b.insurance_subscriber || 'self'}` : 'No insurance given';
+  await q('INSERT INTO web_request (kind, patient_id, data) VALUES (?,?,?)', ['new_patient', pid, JSON.stringify({ message: `New patient registration. ${ins}${b.reason ? ` · Reason: ${b.reason}` : ''}`, existing: !!exists })]);
+  await q('INSERT INTO commlog (patient_id, comm_type, mode, note) VALUES (?,?,?,?)', [pid, 'Misc', 'None', `Registered online. ${ins}`]);
+  return { ok: true, existing: !!exists };
+}));
+
 // ===== Patient portal =====
 async function portalPatient(req) {
   const t = String(req.headers['x-portal-token'] || '');
   if (!t) throw new HttpError(401, 'Please sign in');
-  const row = await one('SELECT * FROM portal_token WHERE token=? AND expires_at > NOW()', [t]);
+  const row = await one('SELECT * FROM portal_token WHERE token=? AND expires_at > NOW()', [sha256(t)]);
   if (!row) throw new HttpError(401, 'Your link has expired. Please sign in again.');
   return row.patient_id;
 }
@@ -87,7 +109,7 @@ r.post('/portal/login', limit(8, 600000), h(async (req) => {
   if (!portal.enabled) throw bad('The patient portal is turned off');
   let pid = null;
   if (req.body.token) {
-    pid = (await one('SELECT patient_id FROM portal_token WHERE token=? AND expires_at > NOW()', [req.body.token]))?.patient_id;
+    pid = (await one('SELECT patient_id FROM portal_token WHERE token=? AND expires_at > NOW()', [sha256(req.body.token)]))?.patient_id;
   } else {
     const { last_name, birthdate, phone } = req.body;
     if (!last_name || !birthdate || digits(phone).length < 10) throw bad('Enter your last name, birthdate and mobile number');
@@ -96,7 +118,8 @@ r.post('/portal/login', limit(8, 600000), h(async (req) => {
   }
   if (!pid) throw new HttpError(401, 'We could not find you. Check your details or call the office.');
   const token = crypto.randomBytes(24).toString('hex');
-  await q('INSERT INTO portal_token (token, patient_id, expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 2 HOUR))', [token, pid]);
+  await q('INSERT INTO portal_token (token, patient_id, expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 30 MINUTE))', [sha256(token), pid]);
+  await q('INSERT INTO audit_log (permission, patient_id, log_text, ip) VALUES (?,?,?,?)', ['PortalLogin', pid, 'Patient signed in to the portal', req.ip]);
   return { token };
 }));
 r.get('/portal/me', h(async (req) => {
@@ -113,6 +136,10 @@ r.get('/portal/me', h(async (req) => {
   const bal = await balances(pid);
   return { patient: p, appointments: appts, treatment: tp.map((x) => ({ ...x, patPortion: est[x.id]?.patPortion ?? x.fee })), balance: bal.family.patPortion,
     forms: forms.map((f) => ({ ...f, lastFilled: done.find((d) => d.sheet_def_id === f.id)?.last || null })) };
+}));
+r.post('/portal/logout', h(async (req) => {
+  await q('DELETE FROM portal_token WHERE token=?', [sha256(String(req.headers['x-portal-token'] || ''))]);
+  return { ok: true };
 }));
 r.post('/portal/confirm/:aptId', h(async (req) => {
   const pid = await portalPatient(req);

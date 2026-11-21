@@ -20,6 +20,7 @@ function Frame({ practice, children }) {
           <img src="/icon.svg" width="36" height="36" alt="" />
           <strong style={{ fontSize: 18 }}>{practice?.name || 'Dental office'}</strong>
           <div className="grow" />
+          <a className="btn sm" href="/register">New patient</a>
           <a className="btn sm" href="/book">Book online</a>
           <a className="btn sm" href="/portal">Patient portal</a>
         </div>
@@ -129,7 +130,7 @@ export function Portal() {
   }
   return (
     <Frame practice={practice}>
-      <div className="row"><h1 className="grow">Hello, {me.patient.preferred || me.patient.first_name}</h1><button type="button" className="btn" onClick={() => { sessionStorage.removeItem('smileos.portal'); setToken(''); setMe(null); }}>Sign out</button></div>
+      <div className="row"><h1 className="grow">Hello, {me.patient.preferred || me.patient.first_name}</h1><button type="button" className="btn" onClick={() => { papi('POST', '/portal/logout', {}, token).catch(() => {}); sessionStorage.removeItem('smileos.portal'); setToken(''); setMe(null); }}>Sign out</button></div>
       {note && <div className="alert" role="status">{note}</div>}
       <div className="grid two">
         <div className="card col">
@@ -176,6 +177,63 @@ export function Portal() {
         <textarea className="input" value={msg} onChange={(e) => setMsg(e.target.value)} placeholder="Question about an appointment, billing or treatment…" aria-label="Message" />
         <button type="button" className="btn primary" style={{ alignSelf: 'flex-start' }} disabled={!msg.trim()} onClick={async () => { await papi('POST', '/portal/message', { message: msg }, token); setMsg(''); setNote('Message sent. We will get back to you soon.'); }}>Send</button>
       </div>
+    </Frame>
+  );
+}
+
+export function Register() {
+  const [practice, setPractice] = useState(null);
+  const [f, setF] = useState({ first_name: '', last_name: '', birthdate: '', gender: '', phone: '', email: '', address: '', city: '', state: '', zip: '', allergies: '', medical_alert: '', insurance_carrier: '', insurance_member_id: '', insurance_subscriber: '', reason: '', text_ok: true, consent: false });
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { papi('GET', '/practice').then(setPractice).catch(() => {}); }, []);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const submit = async (e) => {
+    e.preventDefault(); setErr(''); setBusy(true);
+    try { await papi('POST', '/register', f); setDone(true); window.scrollTo(0, 0); } catch (x) { setErr(x.message); } finally { setBusy(false); }
+  };
+  const F = (k, label, props = {}) => <label className="field" key={k}>{label}<input className="input" value={f[k]} onChange={set(k)} {...props} /></label>;
+  return (
+    <Frame practice={practice}>
+      <h1>New patient registration</h1>
+      {done ? (
+        <div className="card col">
+          <h2>Thank you, {f.first_name}!</h2>
+          <p style={{ margin: 0 }}>Your details were sent securely to {practice?.name || 'the clinic'}. You can now book your first visit.</p>
+          <a className="btn primary" href="/book" style={{ alignSelf: 'flex-start' }}>Book an appointment</a>
+        </div>
+      ) : (
+        <form className="col" onSubmit={submit}>
+          {err && <div className="alert danger" role="alert">{err}</div>}
+          <div className="card col">
+            <h2>About you</h2>
+            <div className="form-grid">
+              {F('first_name', 'First name *', { required: true, autoComplete: 'given-name' })}{F('last_name', 'Last name *', { required: true, autoComplete: 'family-name' })}
+              {F('birthdate', 'Birthdate *', { required: true, type: 'date' })}
+              <label className="field">Gender<select className="input" value={f.gender} onChange={set('gender')}><option value="">Prefer not to say</option><option value="F">Female</option><option value="M">Male</option></select></label>
+              {F('phone', 'Mobile phone *', { required: true, type: 'tel', autoComplete: 'tel' })}{F('email', 'Email', { type: 'email', autoComplete: 'email' })}
+              {F('address', 'Address', { autoComplete: 'street-address' })}{F('city', 'City', { autoComplete: 'address-level2' })}{F('state', 'State', { autoComplete: 'address-level1' })}{F('zip', 'ZIP', { autoComplete: 'postal-code' })}
+            </div>
+          </div>
+          <div className="card col">
+            <h2>Health</h2>
+            {F('allergies', 'Allergies (comma separated)')}
+            {F('medical_alert', 'Medical conditions we should know about')}
+          </div>
+          <div className="card col">
+            <h2>Dental insurance (optional)</h2>
+            <div className="form-grid">{F('insurance_carrier', 'Insurance company')}{F('insurance_member_id', 'Member ID')}{F('insurance_subscriber', 'Policy holder name (if not you)')}</div>
+          </div>
+          <div className="card col">
+            <label className="field">Reason for visit<textarea className="input" value={f.reason} onChange={set('reason')} /></label>
+            <label className="check"><input type="checkbox" checked={f.text_ok} onChange={set('text_ok')} />I agree to receive appointment texts</label>
+            <label className="check"><input type="checkbox" checked={f.consent} onChange={set('consent')} required />I agree that my information is sent securely to the clinic and used for my care, as described in the clinic's privacy notice. *</label>
+            <button className="btn primary" style={{ minHeight: 46 }} disabled={busy || !f.consent}>{busy ? 'Sending…' : 'Submit registration'}</button>
+            <span className="muted small">Your information is sent over an encrypted connection.</span>
+          </div>
+        </form>
+      )}
     </Frame>
   );
 }

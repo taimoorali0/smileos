@@ -1,17 +1,12 @@
+// Brings the control database and every clinic database up to date.
 import 'dotenv/config';
-import fs from 'node:fs';
-import path from 'node:path';
-import mysql from 'mysql2/promise';
+import { DEFAULT_DB, CONTROL_DB, adminConnection } from './db.js';
+import { migrateClinicDb, migrateControlDb } from './migrations.js';
 
-const file = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'db', 'schema.sql');
-const conn = await mysql.createConnection({
-  host: process.env.DB_HOST || 'localhost', port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER || 'smileos', password: process.env.DB_PASSWORD || 'smileos',
-  multipleStatements: true,
-});
-const db = process.env.DB_NAME || 'smileos';
-await conn.query(`CREATE DATABASE IF NOT EXISTS \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-await conn.query(`USE \`${db}\``);
-await conn.query(fs.readFileSync(file, 'utf8'));
-console.log('Schema applied to', db);
-await conn.end();
+await migrateControlDb(CONTROL_DB);
+console.log('Control database ready:', CONTROL_DB);
+if (process.env.MULTI_TENANT !== '1') { await migrateClinicDb(DEFAULT_DB); console.log('Clinic database ready:', DEFAULT_DB); }
+const c = await adminConnection({ database: CONTROL_DB });
+const [tenants] = await c.query("SELECT db_name FROM tenant WHERE status<>'deleted'");
+await c.end();
+for (const t of tenants) { await migrateClinicDb(t.db_name); console.log('Clinic database ready:', t.db_name); }

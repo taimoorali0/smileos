@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
-import { get, post, setToken, getToken, initials } from './api.js';
+import { get, post, initials, setUnauthorizedHandler } from './api.js';
+import { MySecurityModal, IdleGuard } from './components/Security.jsx';
+import { ShareModal } from './components/Share.jsx';
+import { Register } from './pages/Public.jsx';
+import SuperAdmin from './pages/SuperAdmin.jsx';
 import { AppCtx, Icon, Modal, Select, Field } from './components/ui.jsx';
 import Login from './pages/Login.jsx';
 import Schedule from './pages/Schedule.jsx';
@@ -37,12 +41,16 @@ export default function App() {
   const path = window.location.pathname;
   if (path.startsWith('/book')) return <Booking />;
   if (path.startsWith('/portal')) return <Portal />;
+  if (path.startsWith('/register')) return <Register />;
+  if (path.startsWith('/superadmin')) return <SuperAdmin />;
   return <StaffApp />;
 }
 
 function StaffApp() {
   const [user, setUser] = useState(null);
-  const [booting, setBooting] = useState(!!getToken());
+  const [booting, setBooting] = useState(true);
+  const [pending, setPending] = useState(null);
+  const [loginMsg, setLoginMsg] = useState('');
   const [lookups, setLookups] = useState(null);
   const [patient, setPatientState] = useState(null);
   const [toast, setToast] = useState(null);
@@ -61,32 +69,42 @@ function StaffApp() {
   }, []);
 
   const setPatient = useCallback(async (idOrNull) => {
-    if (!idOrNull) { setPatientState(null); localStorage.removeItem('smileos.pat'); return; }
+    if (!idOrNull) { setPatientState(null); sessionStorage.removeItem('smileos.pat'); return; }
     try {
       const d = await get(`/patients/${idOrNull}`);
       setPatientState({ ...d.patient, _full: d });
-      localStorage.setItem('smileos.pat', String(idOrNull));
+      sessionStorage.setItem('smileos.pat', String(idOrNull));
     } catch (e) { notify(e.message, true); }
   }, [notify]);
 
+  const afterLogin = useCallback(async (me) => {
+    setPending(null); setLoginMsg(''); setUser(me); await loadLookups();
+    const last = sessionStorage.getItem('smileos.pat');
+    if (last && me.permissions.includes('FamilyModule')) await setPatient(last);
+  }, [loadLookups, setPatient]);
+  const signOut = useCallback(async (msg = '') => {
+    try { await post('/auth/logout'); } catch { /* already gone */ }
+    sessionStorage.removeItem('smileos.pat');
+    setUser(null); setPatientState(null); setLookups(null); setLoginMsg(msg);
+  }, []);
+
   useEffect(() => {
-    if (!getToken()) return;
+    setUnauthorizedHandler((msg) => { setUser(null); setPatientState(null); setLoginMsg(msg || 'Your session has ended. Please sign in again.'); });
     (async () => {
       try {
         const me = await get('/auth/me');
-        setUser(me); await loadLookups();
-        const last = localStorage.getItem('smileos.pat');
-        if (last && me.permissions.includes('FamilyModule')) await setPatient(last);
-      } catch { setToken(''); } finally { setBooting(false); }
+        if (me.mustChangePassword || me.mustSetupMfa) setPending(me); else await afterLogin(me);
+      } catch { /* not signed in */ } finally { setBooting(false); }
     })();
-  }, [loadLookups, setPatient]);
+  }, [afterLogin]);
 
   const can = useCallback((p) => !p || !!user && (user.permissions.includes(p) || user.permissions.includes('SecurityAdmin')), [user]);
-  const ctx = useMemo(() => ({ user, can, lookups, reloadLookups: loadLookups, patient, setPatient, refreshPatient: () => patient && setPatient(patient.id), notify }),
-    [user, can, lookups, loadLookups, patient, setPatient, notify]);
+  const refreshUser = useCallback(async () => setUser(await get('/auth/me')), []);
+  const ctx = useMemo(() => ({ user, can, lookups, reloadLookups: loadLookups, patient, setPatient, refreshPatient: () => patient && setPatient(patient.id), notify, signOut, refreshUser }),
+    [user, can, lookups, loadLookups, patient, setPatient, notify, signOut, refreshUser]);
 
   if (booting) return <div className="preloader"><img src="/preloader.svg" width="96" height="100" alt="Loading SmileOS" /></div>;
-  if (!user) return <Login onLogin={async (u) => { setUser(u); await loadLookups(); }} />;
+  if (!user) return <Login key={loginMsg + (pending ? 'p' : '')} initialUser={pending} message={loginMsg} onLogin={afterLogin} />;
   if (!lookups) return <div className="preloader"><img src="/preloader.svg" width="96" height="100" alt="Loading SmileOS" /></div>;
 
   return (
@@ -108,12 +126,15 @@ function StaffApp() {
         </Routes>
       </Shell>
       {toast && <div className={`toast ${toast.err ? 'err' : ''}`} role="status">{toast.msg}</div>}
+      <IdleGuard minutes={user.idleMinutes || 15} onTimeout={() => signOut('You were signed out after a period of inactivity.')} />
     </AppCtx.Provider>
   );
 }
 
 function Shell({ children }) {
-  const { user, can, patient, setPatient } = React.useContext(AppCtx);
+  const { user, can, patient, setPatient, signOut, notify, refreshUser } = React.useContext(AppCtx);
+  const [sec, setSec] = useState(false);
+  const [share, setShare] = useState(false);
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || 'light');
   const [comm, setComm] = useState(false);
@@ -123,7 +144,7 @@ function Shell({ children }) {
     document.documentElement.dataset.theme = t; setTheme(t);
     try { localStorage.setItem('smileos.theme', t); } catch { /* ignore */ }
   };
-  const logout = () => { setToken(''); localStorage.removeItem('smileos.pat'); window.location.href = '/'; };
+  const logout = () => signOut('You have signed out.');
   const link = (n) => can(n.perm) && (
     <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => `nav ${isActive ? 'active' : ''}`} onClick={() => setOpen(false)}>
       <Icon name={n.icon} />{n.label}
@@ -145,7 +166,8 @@ function Shell({ children }) {
             <strong style={{ fontSize: 13 }}>{user.fullName}</strong>
             <span className="small" style={{ opacity: .7 }}>{user.username}</span>
           </div>
-          <button type="button" className="btn ghost sm" style={{ color: '#fff' }} onClick={logout} aria-label="Log out" title="Log out"><Icon name="logout" /></button>
+          <button type="button" className="btn ghost sm" style={{ color: '#fff' }} onClick={() => setSec(true)} aria-label="My security" title="My security"><Icon name="settings" /></button>
+          <button type="button" className="btn ghost sm" style={{ color: '#fff' }} onClick={logout} aria-label="Sign out" title="Sign out"><Icon name="logout" /></button>
         </div>
       </nav>
       <div className="main">
@@ -164,6 +186,7 @@ function Shell({ children }) {
           <div className="grow" />
           {patient && <button type="button" className="btn" onClick={() => setComm(true)}><Icon name="clipboard" />Commlog</button>}
           {patient && <button type="button" className="btn" onClick={() => setMsg(true)}><Icon name="message" />Text / Email</button>}
+          <button type="button" className="btn" onClick={() => setShare(true)} title="Share registration and booking links or QR codes"><Icon name="plus" />Invite / QR</button>
           <TimeClockButton />
           <button type="button" className="btn ghost" onClick={toggleTheme} aria-label="Toggle dark mode" title="Light / dark"><Icon name={theme === 'dark' ? 'sun' : 'moon'} /></button>
         </header>
@@ -171,6 +194,8 @@ function Shell({ children }) {
       </div>
       {comm && patient && <CommlogModal patient={patient} onClose={() => setComm(false)} />}
       {msg && patient && <MessageModal patient={patient} onClose={() => setMsg(false)} />}
+      {sec && <MySecurityModal user={user} onClose={() => setSec(false)} notify={notify} refreshUser={refreshUser} />}
+      {share && <ShareModal onClose={() => setShare(false)} />}
     </div>
   );
 }
