@@ -4,9 +4,9 @@
 # Usage:
 #   sudo CF_API_TOKEN=xxxx bash install-ubuntu.sh smileos.marg101.com you@email.com
 #
-# Clinics get their own address: <clinic>.smileos.marg101.com, the admin console is at
-# https://smileos.marg101.com/superadmin. CF_API_TOKEN (Cloudflare token with "Edit zone DNS")
-# lets the installer get one HTTPS certificate for the domain and all clinic subdomains.
+# Everyone uses https://smileos.marg101.com; staff enter their clinic code at sign-in.
+# Admin console: https://smileos.marg101.com/superadmin. CF_API_TOKEN is optional (only for
+# separate clinic subdomains with a wildcard certificate).
 set -euo pipefail
 
 DOMAIN="${1:-}"
@@ -100,7 +100,7 @@ if [[ -n "${CF_API_TOKEN:-}" ]]; then
   echo "dns_cloudflare_api_token = ${CF_API_TOKEN}" > /etc/smileos-cloudflare.ini; chmod 600 /etc/smileos-cloudflare.ini
   certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/smileos-cloudflare.ini -d "$DOMAIN" -d "*.$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive && CERT_OK=1
 else
-  echo "!! CF_API_TOKEN not given: getting a certificate for ${DOMAIN} only. Clinic subdomains need the wildcard certificate (see deploy/README.md)."
+  echo "==> Certificate for ${DOMAIN} (clinics use this one address with a clinic code)"
   systemctl stop nginx || true
   certbot certonly --standalone -d "$DOMAIN" -m "$EMAIL" --agree-tos --non-interactive && CERT_OK=1
   systemctl start nginx
@@ -159,6 +159,6 @@ chmod 700 /etc/cron.daily/smileos-backup
 echo
 echo "SmileOS is installed."
 echo "  1. Create your administrator:   sudo bash ${APP_DIR}/deploy/create-superadmin.sh"
-echo "  2. Optional demo clinic:         sudo bash ${APP_DIR}/deploy/create-demo.sh   (https://demo.${DOMAIN})"
+echo "  2. Optional demo clinic:         sudo bash ${APP_DIR}/deploy/create-demo.sh   (clinic code: demo)"
 echo "  3. Sign in at https://${DOMAIN}/superadmin and create clinics."
 echo "  Backup key: /etc/smileos-backup.key  – copy it somewhere safe; backups cannot be restored without it."

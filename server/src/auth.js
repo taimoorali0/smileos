@@ -190,7 +190,7 @@ export async function mfaDisable(req, password) {
 // The answer is always the same whether or not the account exists (no account discovery).
 // Links are single-use, expire after 30 minutes, and only their hash is stored.
 export const RESET_MINUTES = 30;
-export async function requestPasswordReset(login, req, { sendEmail, baseUrl }) {
+export async function requestPasswordReset(login, req, { sendEmail, linkFor }) {
   const key = String(login || '').trim();
   if (!key) return;
   const u = await one('SELECT * FROM app_user WHERE (username=? OR (email IS NOT NULL AND LOWER(email)=LOWER(?))) AND is_hidden=0 LIMIT 1', [key, key]);
@@ -199,7 +199,7 @@ export async function requestPasswordReset(login, req, { sendEmail, baseUrl }) {
   if (recent.n >= 3) { await audit(u.id, 'PasswordResetRequest', null, 'Too many reset requests – ignored', req); return; }
   const token = randomToken(32);
   await q('INSERT INTO password_reset (id, user_id, expires_at, ip) VALUES (?,?,DATE_ADD(NOW(), INTERVAL ? MINUTE),?)', [sha256(token), u.id, RESET_MINUTES, ip(req)]);
-  const link = `${baseUrl}/reset-password?t=${token}`;
+  const link = await linkFor(token);
   await sendEmail({
     to: u.email, subject: 'Reset your SmileOS password', kind: 'password_reset',
     body: `Hello ${u.full_name},\n\nSomeone asked to reset the password for your SmileOS account "${u.username}".\nTo choose a new password, open this link within ${RESET_MINUTES} minutes:\n\n${link}\n\nIf this was not you, ignore this email and tell your clinic administrator. Your password has not changed.`,

@@ -26,9 +26,22 @@ export async function tenantBySlug(slug, { fresh = false } = {}) {
 }
 export const forgetTenant = (slug) => cache.delete(slug);
 
-/** Work out the clinic slug from the Host header (or X-Tenant header in development/tests). */
+export const CLINIC_COOKIE = 'smileos_clinic';
+const clean = (v) => { const s = String(v || '').trim().toLowerCase(); return /^[a-z0-9-]{3,40}$/.test(s) ? s : null; };
+/**
+ * Work out which clinic a request is for. One shared address is supported:
+ *   1. clinic subdomain (drkhan.smileos.example.com), if used
+ *   2. X-Clinic header sent by the app (clinic code typed at sign-in / ?clinic= in patient links)
+ *   3. ?clinic= in the URL, 4. the clinic cookie remembered after sign-in
+ * Choosing a clinic only selects its database; every clinic still has its own logins and sessions.
+ */
 export function slugFromRequest(req) {
   if (process.env.ALLOW_TENANT_HEADER === '1' && req.headers['x-tenant']) return String(req.headers['x-tenant']).toLowerCase();
+  const fromHost = hostSlug(req);
+  if (fromHost) return fromHost;
+  return clean(req.headers['x-clinic']) || clean(req.query?.clinic) || clean(req.cookies?.[CLINIC_COOKIE]);
+}
+function hostSlug(req) {
   const host = String(req.hostname || '').toLowerCase();
   const baseDomain = String(process.env.BASE_DOMAIN || '').toLowerCase();
   for (const b of [baseDomain, 'localhost'].filter(Boolean)) {
@@ -45,10 +58,10 @@ export async function tenantMiddleware(req, res, next) {
     const slug = slugFromRequest(req);
     if (!slug) {
       if (req.path === '/public/practice') return res.json({ name: 'SmileOS', noClinic: true, portalEnabled: false, bookingEnabled: false });
-      throw new HttpError(404, 'Open your clinic\'s own address, for example https://yourclinic.' + (process.env.BASE_DOMAIN || 'smileos.example.com'));
+      throw new HttpError(404, 'Enter your clinic code to continue.');
     }
     const t = await tenantBySlug(slug);
-    if (!t || t.status === 'deleted') throw new HttpError(404, 'Clinic not found. Check the web address.');
+    if (!t || t.status === 'deleted') throw new HttpError(404, `Clinic code "${slug}" was not found. Check the code with your clinic.`);
     if (t.status === 'suspended') throw new HttpError(403, 'This clinic account is suspended. Please contact SmileOS support.');
     return withDb(t.db_name, next, { ip, tenant: t });
   } catch (e) { next(e); }

@@ -7,9 +7,9 @@ import fs from 'node:fs';
 import { h } from './http.js';
 import { login, verifyMfa, authMiddleware, need, setSessionCookie, COOKIE, changePassword, requestPasswordReset, completePasswordReset, mfaBegin, mfaConfirm, mfaDisable, audit, securityPolicy } from './auth.js';
 import { q } from './db.js';
-import { tenantMiddleware } from './tenancy.js';
+import { tenantMiddleware, CLINIC_COOKIE } from './tenancy.js';
 import { sendEmail } from './logic/messaging.js';
-import { publicBase } from './logic/settings.js';
+import { clinicUrl } from './logic/settings.js';
 import { context } from './db.js';
 import superRoutes from './routes/super.js';
 import setup from './routes/setup.js';
@@ -44,6 +44,7 @@ app.use(express.urlencoded({ extended: false }));
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, name: 'SmileOS' }));
 app.use('/api/super', superRoutes);
+app.post('/api/clinic/forget', (req, res) => { res.clearCookie(CLINIC_COOKIE, { path: '/' }); res.json({ ok: true }); });
 app.use('/api', tenantMiddleware);
 
 // Login is rate limited per IP on top of the per-account lockout
@@ -55,13 +56,16 @@ const loginLimit = (req, _res, next) => {
 app.post('/api/auth/login', loginLimit, h(async (req, res) => {
   const r = await login(req.body.username, req.body.password, req);
   setSessionCookie(req, res, r.token);
-  return r;
+  // Remember the clinic for this browser so the shared address opens the right clinic next time
+  const t = context().tenant;
+  if (t) res.cookie(CLINIC_COOKIE, t.slug, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/', maxAge: 180 * 86400000 });
+  return { ...r, clinic: t ? { code: t.slug, name: t.name } : null };
 }));
 
 app.use('/api/public', publicRoutes);
 app.post('/api/auth/forgot', loginLimit, h(async (req) => {
-  const baseUrl = context().tenant ? await publicBase() : `${req.protocol}://${req.get('host')}`;
-  await requestPasswordReset(req.body.login, req, { sendEmail, baseUrl });
+  const linkFor = async (token) => (context().tenant ? clinicUrl(`/reset-password?t=${token}`) : `${req.protocol}://${req.get('host')}/reset-password?t=${token}`);
+  await requestPasswordReset(req.body.login, req, { sendEmail, linkFor });
   return { ok: true, message: 'If that account has an email address on file, a reset link is on its way. It works for 30 minutes.' };
 }));
 app.post('/api/auth/reset', loginLimit, h(async (req) => completePasswordReset(req.body.token, req.body.password, req)));

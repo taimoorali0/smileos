@@ -107,11 +107,12 @@ test('patient portal login, view, confirm, form submit and SMS confirm', async (
   const pat = await call('GET', '/patients/4');
   assert.equal(pat.patient.email, 'lina.new@example.com');
   assert.ok(pat.medical.some((m) => m.name === 'Latex'));
-  // Inbound SMS "C" confirms next appointment
+  // Inbound SMS "C" confirms next appointment (make sure Lina has one in the future, whatever the time of day)
+  await call('POST', '/appointments', { patient_id: 4, op_id: 2, apt_datetime: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10) + ' 16:00:00', minutes: 30 });
   token = null;
   const xml = await fetch(base + '/public/sms/twilio', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'From=%2B15552012001&Body=C' }).then((r) => r.text());
-  assert.match(xml, /confirmed/);
   token = saved;
+  assert.match(xml, /confirmed/);
 });
 
 test('program link fills patient tags; eRx needs setup', async () => {

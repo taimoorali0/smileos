@@ -85,7 +85,7 @@ r.post('/tenants', h(async (req) => {
   const out = await provisionTenant(req.body);
   await log(req.admin.id, 'TenantCreated', out.id, `${out.slug} (${req.body.name})`, req);
   const base = process.env.BASE_DOMAIN;
-  return { ...out, dbName: undefined, url: base ? `https://${out.slug}.${base}` : `http://${out.slug}.localhost:${process.env.PORT || 4000}` };
+  return { ...out, dbName: undefined, url: base ? `https://${base}/?clinic=${out.slug}` : `http://localhost:${process.env.PORT || 4000}/?clinic=${out.slug}` };
 }));
 r.put('/tenants/:id', h(async (req) => {
   const t = (await cq('SELECT * FROM tenant WHERE id=?', [req.params.id]))[0];

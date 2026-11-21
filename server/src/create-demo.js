@@ -17,4 +17,4 @@ forgetTenant('demo');
 await closeAll();
 const seed = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'db', 'seed.js');
 execFileSync(process.execPath, [seed], { stdio: 'inherit', env: { ...process.env, DB_NAME: t.db_name } });
-console.log(`Demo clinic ready${process.env.BASE_DOMAIN ? ` at https://demo.${process.env.BASE_DOMAIN}` : ' (local: http://demo.localhost:4000)'}`);
+console.log(`Demo clinic ready: open ${process.env.BASE_DOMAIN ? `https://${process.env.BASE_DOMAIN}` : 'http://localhost:4000'} and enter clinic code "demo"`);

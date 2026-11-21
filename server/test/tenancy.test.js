@@ -78,3 +78,28 @@ test('requests without a clinic address are refused', async () => {
   assert.equal((await call('POST', '/auth/login', { username: 'admin', password: 'x' })).status, 404);
   assert.equal((await call('GET', '/public/practice')).data.noClinic, true);
 });
+
+test('one shared address: clinic chosen by code (header, ?clinic= link, remembered cookie)', async () => {
+  const t = (await cq('SELECT id FROM tenant WHERE slug=?', [slugB]))[0];
+  const r = await call('POST', `/super/tenants/${t.id}/reset-admin`, { username: 'admin' }, superTok);
+  const login = await fetch(base + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-clinic': slugB }, body: JSON.stringify({ username: 'admin', password: r.data.tempPassword }) });
+  assert.equal(login.status, 200);
+  const body = await login.json();
+  assert.equal(body.clinic.code, slugB);
+  const cookies = login.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  assert.match(cookies, new RegExp(`smileos_clinic=${slugB}`));
+  // Next visit: cookie alone selects the clinic
+  const me = await fetch(base + '/auth/me', { headers: { cookie: cookies } });
+  assert.equal(me.status, 200);
+  // Patient link with ?clinic=
+  const pr = await (await fetch(`${base}/public/practice?clinic=${slugB}`)).json();
+  assert.equal(pr.name, 'Clinic B');
+  const bad = await call('GET', '/public/practice', null, null);
+  assert.equal(bad.data.noClinic, true);
+  const wrong = await fetch(base + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-clinic': 'no-such-clinic' }, body: '{"username":"a","password":"b"}' });
+  assert.equal(wrong.status, 404);
+  // Share links use the shared address with ?clinic=  (temporary password must be changed first)
+  await fetch(base + '/auth/password', { method: 'POST', headers: { cookie: cookies, 'content-type': 'application/json', 'x-smileos': '1' }, body: JSON.stringify({ current: r.data.tempPassword, next: 'Clinic#B-shared2' }) });
+  const links = await (await fetch(base + '/integrations/share-links', { headers: { cookie: cookies } })).json();
+  assert.match(links.book.url, new RegExp(`/book\\?clinic=${slugB}$`));
+});

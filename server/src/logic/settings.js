@@ -42,15 +42,22 @@ export async function renderTemplate(tpl, { patient, apt, extra = {} } = {}) {
     Practice: pref?.value || 'our office',
     Date: dt ? dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : '',
     Time: dt ? dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '',
-    BookingLink: `${await publicBase()}/book`, PortalLink: `${await publicBase()}/portal`, RegisterLink: `${await publicBase()}/register`,
+    BookingLink: await clinicUrl('/book'), PortalLink: await clinicUrl('/portal'), RegisterLink: await clinicUrl('/register'),
     ...extra,
   };
   return String(tpl).replace(/\[(\w+)\]/g, (m, k) => (k in map ? String(map[k]) : m));
 }
 
-/** Public web address of the current clinic (its own subdomain in multi-clinic mode). */
-export async function publicBase() {
+/**
+ * Full link to a page of the current clinic, e.g. clinicUrl('/book').
+ * Multi-clinic: one shared address with ?clinic=<code> (or the clinic's subdomain when CLINIC_SUBDOMAINS=1).
+ */
+export async function clinicUrl(path = '/') {
   const t = context().tenant;
-  if (t) return process.env.BASE_DOMAIN ? `https://${t.slug}.${process.env.BASE_DOMAIN}` : `http://${t.slug}.localhost:${process.env.PORT || 4000}`;
-  return String((await getSetting('portal')).public_url || '').replace(/\/$/, '');
+  if (!t) return `${String((await getSetting('portal')).public_url || '').replace(/\/$/, '')}${path}`;
+  const base = process.env.BASE_DOMAIN;
+  if (base && process.env.CLINIC_SUBDOMAINS === '1') return `https://${t.slug}.${base}${path}`;
+  const origin = base ? `https://${base}` : `http://localhost:${process.env.PORT || 4000}`;
+  return `${origin}${path}${path.includes('?') ? '&' : '?'}clinic=${t.slug}`;
 }
+export const publicBase = async () => (await clinicUrl('/')).replace(/\/(\?.*)?$/, '');

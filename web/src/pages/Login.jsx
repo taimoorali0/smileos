@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { get, post } from '../api.js';
+import { get, post, getClinic, setClinic as saveClinic } from '../api.js';
 import { PasswordInput, ChangePasswordForm, MfaSetup, passwordChecks } from '../components/Security.jsx';
 
 /**
@@ -15,7 +15,11 @@ export default function Login({ onLogin, initialUser, message }) {
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { get('/public/practice').then(setClinic).catch(() => setClinic({ name: 'SmileOS' })); }, []);
+  const [clinicCode, setClinicCode] = useState(getClinic());
+  const loadClinic = () => get('/public/practice').then((c) => { setClinic(c); return c; });
+  useEffect(() => { loadClinic().catch(() => setClinic({ noClinic: true, bad: true })); }, []);
+  // Clinic code field: shown on the shared address (not when the clinic comes from its own subdomain)
+  const askCode = !clinic || clinic.noClinic || clinic.bad || !!getClinic();
 
   const finish = async (user) => {
     if (user.mustChangePassword) return setStep('change');
@@ -26,6 +30,12 @@ export default function Login({ onLogin, initialUser, message }) {
     e.preventDefault(); setBusy(true); setErr('');
     try {
       try { if (remember) localStorage.setItem('smileos.user', u.trim()); else localStorage.removeItem('smileos.user'); } catch { /* storage blocked */ }
+      if (askCode) {
+        const code = clinicCode.trim().toLowerCase();
+        if (!code) throw new Error('Enter your clinic code');
+        saveClinic(code);
+        try { const c = await loadClinic(); if (c.noClinic) throw new Error(); } catch { saveClinic(''); throw new Error(`Clinic code "${code}" was not found. Check it with your clinic.`); }
+      }
       const r = await post('/auth/login', { username: u.trim(), password: p });
       setP('');
       if (r.mfaRequired) setStep('mfa'); else await finish(r.user);
@@ -57,27 +67,23 @@ export default function Login({ onLogin, initialUser, message }) {
       <main className="login-main">
         <div className="login-card">
           <div className="login-logo"><img src="/icon.svg" width="34" height="34" alt="SmileOS" /></div>
-          {clinic?.noClinic ? (
-            <>
-              <h2>Open your clinic's address</h2>
-              <p className="muted">Each clinic has its own web address, for example <strong>yourclinic.{window.location.host}</strong>. Ask your clinic administrator for it.</p>
-              <a className="btn" href="/superadmin">SmileOS administrator sign-in</a>
-            </>
-          ) : (
+          {(
             <>
               <h2>{step === 'login' ? 'Welcome back' : titles[step]}</h2>
-              {step === 'login' && <p className="muted" style={{ margin: '-6px 0 4px' }}>Sign in to {clinic?.name || 'your clinic'}</p>}
+              {step === 'login' && <p className="muted" style={{ margin: '-6px 0 4px' }}>{clinic && !clinic.noClinic && !clinic.bad ? `Sign in to ${clinic.name}` : 'Sign in to your clinic'}</p>}
               {message && step === 'login' && <div className="alert" role="status">{message}</div>}
               {err && <div className="alert danger" role="alert">{err}</div>}
               {step === 'login' && (
                 <form className="col" onSubmit={submit}>
-                  <label className="field">Username<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoFocus={!u} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="e.g. frontdesk" /></label>
+                  {askCode && <label className="field">Clinic code<input className="input" value={clinicCode} onChange={(e) => setClinicCode(e.target.value.replace(/\s/g, '').toLowerCase())} autoFocus={!clinicCode} autoCapitalize="none" spellCheck="false" placeholder="e.g. demo" /></label>}
+                  <label className="field">Username<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoFocus={!!clinicCode && !u} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="e.g. frontdesk" /></label>
                   <PasswordInput label="Password" value={p} onChange={setP} autoComplete="current-password" autoFocus={!!u} />
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     <label className="check small"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />Remember my username</label>
                     <button type="button" className="btn ghost sm" onClick={() => { setStep('forgot'); setErr(''); }}>Forgot password?</button>
                   </div>
-                  <button className="btn login-btn" disabled={busy || !u || !p}>{busy ? 'Signing in…' : 'Sign in'}</button>
+                  <button className="btn login-btn" disabled={busy || !u || !p || (askCode && !clinicCode)}>{busy ? 'Signing in…' : 'Sign in'}</button>
+                  <p className="muted small" style={{ margin: 0, textAlign: 'center' }}>Don't know your clinic code? Ask your clinic administrator. · <a href="/superadmin">SmileOS admin</a></p>
                 </form>
               )}
               {step === 'mfa' && (

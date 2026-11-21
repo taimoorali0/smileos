@@ -4,7 +4,7 @@ import SftpClient from 'ssh2-sftp-client';
 import { q, one, tx } from '../db.js';
 import { h, bad, notFound, today, round2 } from '../http.js';
 import { need, audit } from '../auth.js';
-import { getSetting, getSettingMasked, saveSetting, renderTemplate, DEFAULTS, publicBase } from '../logic/settings.js';
+import { getSetting, getSettingMasked, saveSetting, renderTemplate, DEFAULTS, clinicUrl } from '../logic/settings.js';
 import { sendSms, sendEmail } from '../logic/messaging.js';
 import { build837, build270, parse835, sample835 } from '../logic/x12.js';
 import { sha256 } from '../security.js';
@@ -249,7 +249,7 @@ r.post('/portal-link/:pid', h(async (req) => {
   const token = crypto.randomBytes(24).toString('hex');
   await q('INSERT INTO portal_token (token, patient_id, expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 7 DAY))', [sha256(token), req.params.pid]);
   await audit(req.user.id, 'PatientEdit', req.params.pid, 'Portal link created', req);
-  const url = `${await publicBase()}/portal?t=${token}`;
+  const url = await clinicUrl(`/portal?t=${token}`);
   if (req.body.send) {
     const p = await one('SELECT * FROM patient WHERE id=?', [req.params.pid]);
     const body = await renderTemplate('Hi [FName], here is your secure link to the [Practice] patient portal: ' + url, { patient: p });
@@ -265,7 +265,7 @@ r.post('/invite', h(async (req) => {
   const { kind, channel, to, name } = req.body;
   if (!['register', 'book'].includes(kind)) throw bad('Choose register or book');
   if (!to) throw bad(channel === 'email' ? 'Enter an email address' : 'Enter a mobile number');
-  const link = `${await publicBase()}/${kind === 'register' ? 'register' : 'book'}`;
+  const link = await clinicUrl(kind === 'register' ? '/register' : '/book');
   const first = String(name || '').trim().split(/\s+/)[0] || 'there';
   const body = await renderTemplate(kind === 'register'
     ? `Hi ${first}, welcome to [Practice]! Please fill in your new patient registration here: ${link}`
@@ -280,7 +280,7 @@ r.post('/invite', h(async (req) => {
 
 // Shareable links and QR codes for new patient registration and online booking
 r.get('/share-links', h(async (req) => {
-  const base = `${req.protocol}://${req.get('host')}`;
-  const mk = async (path) => { const url = `${base.replace(/\/$/, '')}${path}`; return { url, qr: await QRCode.toDataURL(url, { margin: 1, width: 320, color: { dark: '#10265F' } }) }; };
+  const local = `${req.protocol}://${req.get('host')}`;
+  const mk = async (path) => { const url = context().tenant ? (await clinicUrl(path)).replace(/^https?:\/\/localhost:\d+/, local) : `${local}${path}`; return { url, qr: await QRCode.toDataURL(url, { margin: 1, width: 320, color: { dark: '#10265F' } }) }; };
   return { register: await mk('/register'), book: await mk('/book'), portal: await mk('/portal') };
 }));
