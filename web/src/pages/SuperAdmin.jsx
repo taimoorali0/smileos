@@ -42,10 +42,14 @@ function SuperLogin({ onDone, message }) {
   const codeInput = <input className="input" aria-label="6-digit code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} style={{ fontSize: 28, letterSpacing: 12, textAlign: 'center', minHeight: 56 }} />;
   return (
     <div className="login-wrap">
-      <aside className="login-brand"><img src="/icon.svg" width="56" height="56" alt="" /><h1>SmileOS</h1><p>Administrator console</p>
-        <ul><li>Create and manage clinics</li><li>Each clinic's data in its own database</li><li>Two-factor sign-in required</li><li>Every action is logged</li></ul></aside>
+      <div className="login-frame">
+      <aside className="login-brand">
+        <div className="login-orb" aria-hidden="true"><span className="login-word">SMILE</span><span className="sphere" /><span className="login-sub">ADMIN CONSOLE</span></div>
+        <div className="login-copy"><h1>SmileOS administration</h1><p>Create and manage clinics securely.</p>
+        <ul><li>Create and manage clinics</li><li>Each clinic's data in its own database</li><li>Two-factor sign-in required</li><li>Every action is logged</li></ul></div></aside>
       <main className="login-main">
         <div className="login-card">
+          <div className="login-logo"><img src="/icon.svg" width="34" height="34" alt="SmileOS" /></div>
           <h2>{{ login: 'Administrator sign-in', mfa: 'Two-factor check', setup: 'Set up two-factor' }[step]}</h2>
           {message && step === 'login' && <div className="alert">{message}</div>}
           {err && <div className="alert danger" role="alert">{err}</div>}
@@ -53,7 +57,7 @@ function SuperLogin({ onDone, message }) {
             <form className="col" onSubmit={login}>
               <label className="field">Email<input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoFocus /></label>
               <PasswordInput label="Password" value={pw} onChange={setPw} autoComplete="current-password" />
-              <button className="btn primary" style={{ minHeight: 46 }} disabled={!email || !pw}>Continue</button>
+              <button className="btn login-btn" disabled={!email || !pw}>Continue</button>
             </form>
           )}
           {step === 'mfa' && <form className="col" onSubmit={verify}><p className="muted" style={{ margin: 0 }}>Enter the 6-digit code from your authenticator app.</p>{codeInput}<button className="btn primary" style={{ minHeight: 46 }} disabled={code.length !== 6}>Verify</button></form>}
@@ -67,6 +71,7 @@ function SuperLogin({ onDone, message }) {
           )}
         </div>
       </main>
+    </div>
     </div>
   );
 }

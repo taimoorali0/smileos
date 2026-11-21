@@ -9,7 +9,9 @@ import { PasswordInput, ChangePasswordForm, MfaSetup } from '../components/Secur
 export default function Login({ onLogin, initialUser, message }) {
   const [clinic, setClinic] = useState(null);
   const [step, setStep] = useState(() => (initialUser?.mustChangePassword ? 'change' : initialUser?.mustSetupMfa ? 'mfasetup' : 'login'));
-  const [u, setU] = useState('');
+  const [u, setU] = useState(() => { try { return localStorage.getItem('smileos.user') || ''; } catch { return ''; } });
+  const [remember, setRemember] = useState(() => { try { return !!localStorage.getItem('smileos.user'); } catch { return false; } });
+  const [forgot, setForgot] = useState(false);
   const [p, setP] = useState('');
   const [code, setCode] = useState('');
   const [err, setErr] = useState('');
@@ -24,6 +26,7 @@ export default function Login({ onLogin, initialUser, message }) {
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setErr('');
     try {
+      try { if (remember) localStorage.setItem('smileos.user', u.trim()); else localStorage.removeItem('smileos.user'); } catch { /* storage blocked */ }
       const r = await post('/auth/login', { username: u.trim(), password: p });
       setP('');
       if (r.mfaRequired) setStep('mfa'); else await finish(r.user);
@@ -38,19 +41,23 @@ export default function Login({ onLogin, initialUser, message }) {
   const titles = { login: 'Sign in', mfa: 'Two-factor check', change: 'Choose a new password', mfasetup: 'Set up two-factor sign-in' };
   return (
     <div className="login-wrap">
+      <div className="login-frame">
       <aside className="login-brand">
-        <img src="/icon.svg" width="56" height="56" alt="" />
-        <h1>SmileOS</h1>
-        <p>Dental practice management</p>
+        <div className="login-orb" aria-hidden="true"><span className="login-word">SMILE</span><span className="sphere" /><span className="login-sub">DENTAL · OS</span></div>
+        <div className="login-copy">
+        <h1>Smarter dental practice</h1>
+        <p>Schedule, chart, bill and talk to patients from one secure place.</p>
         <ul>
           <li>Encrypted connection and secure sessions</li>
           <li>Two-factor sign-in with an authenticator app</li>
           <li>Automatic sign-out when you step away</li>
           <li>Every access to patient records is logged</li>
         </ul>
+        </div>
       </aside>
       <main className="login-main">
         <div className="login-card">
+          <div className="login-logo"><img src="/icon.svg" width="34" height="34" alt="SmileOS" /></div>
           {clinic?.noClinic ? (
             <>
               <h2>Open your clinic's address</h2>
@@ -59,16 +66,20 @@ export default function Login({ onLogin, initialUser, message }) {
             </>
           ) : (
             <>
-              <div className="muted small" style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>{clinic?.name || ' '}</div>
-              <h2>{titles[step]}</h2>
+              <h2>{step === 'login' ? 'Welcome back' : titles[step]}</h2>
+              {step === 'login' && <p className="muted" style={{ margin: '-6px 0 4px' }}>Sign in to {clinic?.name || 'your clinic'}</p>}
               {message && step === 'login' && <div className="alert" role="status">{message}</div>}
               {err && <div className="alert danger" role="alert">{err}</div>}
               {step === 'login' && (
                 <form className="col" onSubmit={submit}>
-                  <label className="field">Username<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoFocus autoComplete="username" autoCapitalize="none" spellCheck="false" /></label>
-                  <PasswordInput label="Password" value={p} onChange={setP} autoComplete="current-password" />
-                  <button className="btn primary" style={{ minHeight: 46 }} disabled={busy || !u || !p}>{busy ? 'Signing in…' : 'Sign in'}</button>
-                  <p className="muted small" style={{ margin: 0 }}>Forgot your password? Ask your clinic administrator to reset it. After 5 wrong attempts the account locks for 15 minutes.</p>
+                  <label className="field">Username<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoFocus={!u} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="e.g. frontdesk" /></label>
+                  <PasswordInput label="Password" value={p} onChange={setP} autoComplete="current-password" autoFocus={!!u} />
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <label className="check small"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />Remember my username</label>
+                    <button type="button" className="btn ghost sm" onClick={() => setForgot(!forgot)}>Forgot password?</button>
+                  </div>
+                  {forgot && <div className="alert" role="status">For security, passwords are reset by your clinic administrator. Ask them for a temporary password. After 5 wrong attempts the account locks for 15 minutes.</div>}
+                  <button className="btn login-btn" disabled={busy || !u || !p}>{busy ? 'Signing in…' : 'Sign in'}</button>
                 </form>
               )}
               {step === 'mfa' && (
@@ -86,8 +97,12 @@ export default function Login({ onLogin, initialUser, message }) {
             </>
           )}
         </div>
-        <p className="muted small" style={{ textAlign: 'center' }}>Authorized users only. Activity is monitored and logged.</p>
+        <div className="login-trust">
+          <span className="login-shield" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></svg></span>
+          <div className="col" style={{ gap: 0 }}><strong>Protected patient data</strong><span className="muted small">Encrypted connection · two-factor sign-in · every access logged. Authorized users only.</span></div>
+        </div>
       </main>
+    </div>
     </div>
   );
 }
