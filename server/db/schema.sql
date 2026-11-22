@@ -504,6 +504,14 @@ CREATE TABLE IF NOT EXISTS document (
   FOREIGN KEY (patient_id) REFERENCES patient(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS document_review (
+  document_id INT PRIMARY KEY,
+  reviewer_id INT NOT NULL,
+  reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (document_id) REFERENCES document(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewer_id) REFERENCES app_user(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS time_clock (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,

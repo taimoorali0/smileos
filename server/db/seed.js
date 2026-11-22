@@ -4,7 +4,7 @@ import { pool, q } from '../src/db.js';
 import { seedClinicBase } from './defaults.js';
 
 
-const tables = ['user_session', 'message_log', 'claim_file', 'portal_token', 'web_request', 'sheet', 'sheet_def', 'program_link', 'integration_setting', 'audit_log', 'claim_proc', 'claim', 'pay_split', 'payment', 'adjustment', 'payment_plan', 'repeat_charge', 'statement', 'commlog', 'task', 'document',
+const tables = ['user_session', 'message_log', 'claim_file', 'portal_token', 'web_request', 'sheet', 'sheet_def', 'program_link', 'integration_setting', 'audit_log', 'claim_proc', 'claim', 'pay_split', 'payment', 'adjustment', 'payment_plan', 'repeat_charge', 'statement', 'commlog', 'task', 'document_review', 'document',
   'time_clock', 'supply', 'progress_note', 'treat_plan', 'perio_measure', 'medication_pat', 'rx', 'lab_case', 'procedure_log', 'blockout', 'appointment', 'recall',
   'ref_attach', 'referral', 'pat_plan', 'ins_sub', 'benefit', 'ins_plan', 'carrier', 'patient', 'appt_type', 'fee', 'procedure_code', 'fee_schedule',
   'provider_schedule', 'operatory', 'app_user', 'provider', 'group_permission', 'user_group', 'definition', 'preference', 'clinic'];

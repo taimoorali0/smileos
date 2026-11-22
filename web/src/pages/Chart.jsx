@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { post, put, del, money, fmtDate, PROC_STATUS, PROC_STATUS_NAME, APT_STATUS } from '../api.js';
 import { useApp, useLoad, NeedPatient, Table, Modal, Select, Input, Field } from '../components/ui.jsx';
 import ApptEdit from '../components/ApptEdit.jsx';
@@ -62,6 +63,7 @@ export default function Chart() {
     <>
       <div className="row">
         <h1 className="grow">Chart – {patient.first_name} {patient.last_name}</h1>
+        {can('ImagingModule') && <Link className="btn" to="/imaging?view=xrays">Patient X-rays</Link>}
         {patient.medical_alert && <span className="badge danger">{patient.medical_alert}</span>}
         {patient.allergies && <span className="badge danger">Allergy: {patient.allergies}</span>}
       </div>

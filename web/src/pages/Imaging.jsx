@@ -1,56 +1,98 @@
 import React, { useRef, useState } from 'react';
-import { api, put, del, getToken, fmtDate } from '../api.js';
+import { Link, useSearchParams } from 'react-router-dom';
+import { api, post, put, del, getClinic, fmtDate } from '../api.js';
 import { useApp, useLoad, NeedPatient, Select, Input, Field, Empty, Modal } from '../components/ui.jsx';
 import Bridges from '../components/Bridges.jsx';
 
 export default function Imaging() {
-  const { patient, lookups, notify, can } = useApp();
-  const [docs, reload] = useLoad(patient ? `/imaging/${patient.id}` : null);
+  const { patient, can } = useApp();
+  const [params] = useSearchParams();
+  const xrays = params.get('view') === 'xrays';
+  if (!can('ImagingModule')) return <Empty>You do not have access to patient imaging.</Empty>;
+  if (!patient) return <NeedPatient />;
+  return <PatientImaging key={`${getClinic()}:${patient.id}:${xrays}`} patient={patient} xrays={xrays} />;
+}
+
+function PatientImaging({ patient, xrays }) {
+  const { lookups, notify, can } = useApp();
+  const [docs, reload, loading, error] = useLoad(`/imaging/${patient.id}`);
   const [sel, setSel] = useState(null);
   const [cat, setCat] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(null);
   const [fx, setFx] = useState({ b: 100, c: 100, inv: false, zoom: 1, rot: 0 });
   const [camera, setCamera] = useState(false);
   const fileRef = useRef();
-  if (!patient) return <NeedPatient />;
   const cats = lookups.defs('ImageCat');
-  const url = (d) => `/api/imaging/file/${d.id}`;
-  const shown = (docs || []).filter((d) => !cat || String(d.category_id) === String(cat));
-  const cur = docs?.find((d) => d.id === sel);
+  const xrayCategory = cats.find((c) => c.abbr === 'XR');
+  const clinic = getClinic();
+  const url = (d) => `/api/imaging/file/${d.id}${clinic ? `?clinic=${encodeURIComponent(clinic)}` : ''}`;
+  const shown = (docs || []).filter((d) => xrays ? d.category_code === 'XR' : !cat || String(d.category_id) === String(cat));
+  const cur = shown.find((d) => d.id === sel) || (xrays ? shown[0] : null);
+
+  const review = async () => {
+    setBusy('review');
+    try {
+      await post(`/imaging/${patient.id}/review/${cur.id}`);
+      await reload();
+      notify('X-ray marked reviewed');
+    } catch (e) { notify(e.message, true); } finally { setBusy(null); }
+  };
 
   const upload = async (files) => {
-    setBusy(true);
+    if (busy) return;
+    if (xrays && !xrayCategory) { notify('Enable the X-rays category in Setup before uploading.', true); return; }
+    setBusy('upload');
+    const category = xrays ? xrayCategory.id : cat;
+    let uploaded = 0;
+    let firstId;
     try {
       for (const f of files) {
-        const fd = new FormData(); fd.append('file', f); if (cat) fd.append('category_id', cat);
-        await api('POST', `/imaging/${patient.id}`, fd);
+        const fd = new FormData(); fd.append('file', f); if (category) fd.append('category_id', category);
+        if (getClinic() !== clinic) throw new Error('Clinic changed during upload.');
+        const saved = await api('POST', `/imaging/${patient.id}`, fd);
+        firstId ??= saved.id;
+        uploaded++;
       }
-      notify(`${files.length} file(s) uploaded`); reload();
-    } catch (e) { notify(e.message, true); } finally { setBusy(false); if (fileRef.current) fileRef.current.value = ''; }
+      notify(`${uploaded} file${uploaded === 1 ? '' : 's'} uploaded for ${patient.first_name} ${patient.last_name}`);
+    } catch (e) {
+      notify(`${uploaded} of ${files.length} files uploaded. ${files[uploaded]?.name || 'Upload'}: ${e.message}`, true);
+    } finally {
+      if (uploaded) {
+        await reload();
+        setSel(firstId);
+        setFx({ b: 100, c: 100, inv: false, zoom: 1, rot: 0 });
+      }
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   return (
     <>
       <div className="row">
-        <h1 className="grow">Imaging – {patient.first_name} {patient.last_name}</h1>
-        <div style={{ width: 200 }}><Select label="" value={cat} onChange={setCat} options={cats.map((c) => ({ value: c.id, label: c.name }))} empty="All categories" aria-label="Category" /></div>
+        <h1 className="grow">{xrays ? 'X-rays' : 'Imaging'} – {patient.first_name} {patient.last_name}</h1>
+        <Link className="btn" to={xrays ? '/imaging' : '/imaging?view=xrays'}>{xrays ? 'All imaging' : 'Patient X-rays'}</Link>
+        {!xrays && <div style={{ width: 200 }}><Select label="" value={cat} onChange={setCat} options={cats.map((c) => ({ value: c.id, label: c.name }))} empty="All categories" aria-label="Category" /></div>}
         {can('ImageCreate') && <>
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple hidden onChange={(e) => e.target.files.length && upload([...e.target.files])} />
-          <button type="button" className="btn" onClick={() => setCamera(true)}>Camera capture</button>
-          <button type="button" className="btn primary" disabled={busy} onClick={() => fileRef.current.click()}>{busy ? 'Uploading…' : 'Upload / import'}</button>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,application/pdf" multiple hidden onChange={(e) => e.target.files.length && upload([...e.target.files])} />
+          {!xrays && <button type="button" className="btn" onClick={() => setCamera(true)}>Camera capture</button>}
+          <button type="button" className="btn primary" disabled={!!busy} onClick={() => fileRef.current.click()}>{busy === 'upload' ? 'Uploading…' : xrays ? 'Upload X-rays' : 'Upload / import'}</button>
         </>}
       </div>
+      <p className="muted">Patient #{patient.id}{patient.birthdate && ` · Born ${fmtDate(patient.birthdate)}`}</p>
+      {error && <div role="alert" className="alert danger">{error}</div>}
       <Bridges categories={['Imaging', 'AI']} />
       {camera && <CameraModal onClose={() => setCamera(false)} onCapture={(file) => { setCamera(false); upload([file]); }} />}
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="card" style={{ flex: '1 1 300px' }}
           onDragOver={(e) => { e.preventDefault(); }} onDrop={(e) => { e.preventDefault(); if (can('ImageCreate') && e.dataTransfer.files.length) upload([...e.dataTransfer.files]); }}>
-          {!shown.length && <Empty>No images yet. Drop X-rays, photos or PDFs here.</Empty>}
+          {loading && !docs && <Empty>Loading images…</Empty>}
+          {!loading && !error && !shown.length && <Empty>{xrays ? 'No X-rays for this patient.' : 'No images for this patient.'}</Empty>}
           <div className="thumbs">
             {shown.map((d) => (
-              <button type="button" key={d.id} className="thumb" onClick={() => { setSel(d.id); setFx({ b: 100, c: 100, inv: false, zoom: 1, rot: 0 }); }} style={{ outline: sel === d.id ? '2px solid var(--primary)' : undefined }}>
+              <button type="button" key={d.id} className="thumb" onClick={() => { setSel(d.id); setFx({ b: 100, c: 100, inv: false, zoom: 1, rot: 0 }); }} style={{ outline: cur?.id === d.id ? '2px solid var(--primary)' : undefined }}>
                 {d.mime === 'application/pdf' ? <div style={{ height: 120, display: 'grid', placeItems: 'center', background: 'var(--soft)', fontWeight: 800 }}>PDF</div> : <img src={url(d)} alt={d.description || 'Image'} loading="lazy" />}
-                <div className="cap"><strong>{d.description}</strong><div className="muted">{d.category || 'Uncategorized'} · {fmtDate(d.created_at)}</div></div>
+                <div className="cap"><strong>{d.description}</strong><div className="muted">{d.category || 'Uncategorized'} · {fmtDate(d.created_at)}{d.category_code === 'XR' && (d.reviewed_at ? ' · Reviewed' : ' · Awaiting review')}</div></div>
               </button>
             ))}
           </div>
@@ -74,6 +116,11 @@ export default function Imaging() {
                 </div>
               </>
             )}
+            {cur.category_code === 'XR' && <div className="row">
+              {cur.reviewed_at
+                ? <span>Reviewed by {cur.reviewer} on {fmtDate(cur.reviewed_at)}</span>
+                : <><span>Awaiting review</span>{can('ImageReview') && <button type="button" className="btn primary" disabled={!!busy} onClick={review}>{busy === 'review' ? 'Saving review…' : 'Mark reviewed'}</button>}</>}
+            </div>}
             <DocInfo key={cur.id} d={cur} cats={cats} onSaved={reload} onDeleted={() => { setSel(null); reload(); }} />
           </div>
         )}
@@ -85,11 +132,12 @@ export default function Imaging() {
 function DocInfo({ d, cats, onSaved, onDeleted }) {
   const { notify, can } = useApp();
   const [f, setF] = useState({ description: d.description, category_id: d.category_id, tooth: d.tooth });
+  if (!can('ImageCreate') && !can('ImageDelete')) return <div>{d.description}{d.tooth && ` · Tooth ${d.tooth}`}</div>;
   return (
     <div className="form-grid">
-      <Input label="Description" value={f.description} onChange={(v) => setF({ ...f, description: v })} />
-      <Select label="Category" value={f.category_id} onChange={(v) => setF({ ...f, category_id: v })} options={cats.map((c) => ({ value: c.id, label: c.name }))} empty="(none)" />
-      <Input label="Tooth" value={f.tooth} onChange={(v) => setF({ ...f, tooth: v })} />
+      <Input disabled={!can('ImageCreate')} label="Description" value={f.description} onChange={(v) => setF({ ...f, description: v })} />
+      <Select disabled={!can('ImageCreate')} label="Category" value={f.category_id} onChange={(v) => setF({ ...f, category_id: v })} options={cats.map((c) => ({ value: c.id, label: c.name }))} empty="(none)" />
+      <Input disabled={!can('ImageCreate')} label="Tooth" value={f.tooth} onChange={(v) => setF({ ...f, tooth: v })} />
       <Field label=" ">
         <div className="row">
           {can('ImageCreate') && <button type="button" className="btn" onClick={async () => { await put(`/imaging/doc/${d.id}`, f); notify('Saved'); onSaved(); }}>Save</button>}

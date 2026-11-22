@@ -110,9 +110,9 @@ if (fs.existsSync(webDist)) {
 const DB_HINTS = {
   ER_BAD_FIELD_ERROR: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
   ER_NO_SUCH_TABLE: 'The database is out of date. Run the update (sudo bash /opt/smileos/deploy/update.sh) or restart SmileOS.',
-  ER_DBACCESS_DENIED_ERROR: 'The SmileOS database user is not allowed to create clinic databases. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ER_DBACCESS_DENIED_ERROR: 'The SmileOS MySQL account cannot access or create the clinic database. Ask your server administrator to check the privileges for the configured account.',
   ER_ACCESS_DENIED_ERROR: 'SmileOS cannot sign in to MySQL. Check DB_USER / DB_PASSWORD in /etc/smileos.env.',
-  ER_TABLEACCESS_DENIED_ERROR: 'The SmileOS database user is missing permissions. Run: GRANT ALL ON `smileos%`.* TO \'smileos\'@\'localhost\';',
+  ER_TABLEACCESS_DENIED_ERROR: 'The SmileOS MySQL account lacks required permissions in the clinic database. Ask your server administrator to check its privileges.',
   ECONNREFUSED: 'The database server is not running. Start it with: sudo systemctl start mysql',
 };
 app.use((err, req, res, _next) => {

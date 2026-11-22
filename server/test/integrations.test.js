@@ -124,3 +124,46 @@ test('program link fills patient tags; eRx needs setup', async () => {
   assert.equal(l.args, '4 "Haddad" "Lina" 11/30/1997');
   await assert.rejects(call('GET', '/integrations/erx/launch/4'), /not turned on/);
 });
+
+test('staff upload a patient X-ray and a dentist records one review for that patient', async () => {
+  const { appts } = await call('GET', '/appointments/schedule');
+  const ids = [...new Set(appts.map((a) => a.patient_id))];
+  assert.ok(ids.length >= 2);
+  const [patientId, otherPatientId] = ids;
+  const category = (await call('GET', '/setup/definitions')).find((d) => d.category === 'ImageCat' && d.abbr === 'XR');
+  const frontDesk = (await call('POST', '/auth/login', { username: 'frontdesk', password: 'smileos123' })).token;
+  const dentist = (await call('POST', '/auth/login', { username: 'drkhan', password: 'smileos123' })).token;
+  const invalid = new FormData();
+  invalid.append('file', new Blob(['invalid image'], { type: 'image/png' }), 'invalid.png');
+  const rejected = await fetch(base + `/imaging/${patientId}`, {
+    method: 'POST', headers: { authorization: `Bearer ${frontDesk}` }, body: invalid,
+  });
+  assert.equal(rejected.status, 400);
+  const form = new FormData();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN2QAAAAASUVORK5CYII=', 'base64');
+  form.append('category_id', String(category.id));
+  form.append('file', new Blob([png], { type: 'image/png' }), 'sample-xray.png');
+  const upload = await fetch(base + `/imaging/${patientId}`, { method: 'POST', headers: { authorization: `Bearer ${frontDesk}` }, body: form });
+  assert.equal(upload.status, 200);
+  const { id } = await upload.json();
+  try {
+    const reviewPath = `/imaging/${patientId}/review/${id}`;
+    const doctor = { authorization: `Bearer ${dentist}` };
+    const file = await fetch(base + `/imaging/file/${id}`, { headers: doctor });
+    assert.equal(file.status, 200);
+    assert.deepEqual(Buffer.from(await file.arrayBuffer()), png);
+    const staff = { authorization: `Bearer ${frontDesk}` };
+    await assert.rejects(call('POST', reviewPath, {}, staff), { status: 403 });
+    await assert.rejects(call('POST', `/imaging/${otherPatientId}/review/${id}`, {}, doctor), { status: 404 });
+    await call('POST', reviewPath, {}, doctor);
+    const reviewed = (await call('GET', `/imaging/${patientId}`)).find((d) => d.id === id);
+    assert.equal(reviewed.reviewer, 'Dr. Sami Khan');
+    assert.ok(reviewed.reviewed_at);
+    await call('POST', reviewPath, {});
+    const repeated = (await call('GET', `/imaging/${patientId}`)).find((d) => d.id === id);
+    assert.equal(repeated.reviewer, reviewed.reviewer);
+    assert.equal(repeated.reviewed_at, reviewed.reviewed_at);
+  } finally {
+    await call('DELETE', `/imaging/doc/${id}`);
+  }
+});

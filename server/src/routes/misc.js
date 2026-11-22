@@ -1,33 +1,92 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import multer from 'multer';
-import { q, one } from '../db.js';
-import { h, bad, notFound, today } from '../http.js';
+import { q, one, tx } from '../db.js';
+import { HttpError, h, bad, notFound, today } from '../http.js';
 import { need, audit } from '../auth.js';
 import { aging } from '../logic/ledger.js';
 
 const UPLOAD = path.resolve(process.env.UPLOAD_DIR || './uploads');
 fs.mkdirSync(UPLOAD, { recursive: true });
+const fileTypes = {
+  'image/png': { extension: 'png', matches: (b) => b.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) },
+  'image/jpeg': { extension: 'jpg', matches: (b) => b.subarray(0, 3).equals(Buffer.from('ffd8ff', 'hex')) },
+  'image/gif': { extension: 'gif', matches: (b) => ['GIF87a', 'GIF89a'].includes(b.toString('ascii', 0, 6)) },
+  'image/webp': { extension: 'webp', matches: (b) => b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+  'image/bmp': { extension: 'bmp', matches: (b) => b.toString('ascii', 0, 2) === 'BM' },
+  'application/pdf': { extension: 'pdf', matches: (b) => b.toString('ascii', 0, 5) === '%PDF-' },
+};
 const upload = multer({
-  storage: multer.diskStorage({ destination: UPLOAD, filename: (_r, f, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(f.originalname).toLowerCase()}`) }),
+  storage: multer.diskStorage({
+    destination: UPLOAD,
+    filename: (_req, file, callback) => callback(null, `${randomUUID()}.${fileTypes[file.mimetype].extension}`),
+  }),
   limits: { fileSize: 25 * 1024 * 1024 },
-  fileFilter: (_r, f, cb) => cb(null, /^(image\/(png|jpeg|gif|webp|bmp)|application\/pdf)$/.test(f.mimetype)),
-});
+  fileFilter: (_req, file, callback) => callback(null, Object.hasOwn(fileTypes, file.mimetype)),
+}).single('file');
+
+function acceptUpload(req, res, next) {
+  upload(req, res, (error) => {
+    if (error?.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'Imaging files must be 25 MB or smaller'));
+    return next(error instanceof multer.MulterError ? bad('Choose one file to upload') : error);
+  });
+}
+
+async function checkFileType(file) {
+  const handle = await fs.promises.open(file.path, 'r');
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header);
+    if (!fileTypes[file.mimetype].matches(header.subarray(0, bytesRead))) throw bad('The file does not match its selected format');
+  } finally {
+    await handle.close();
+  }
+}
 
 // ===== Imaging =====
 export const imaging = Router();
-imaging.get('/:pid', need('ImagingModule'), h(async (req) => q(`SELECT d.*, df.name category FROM document d LEFT JOIN definition df ON df.id=d.category_id WHERE d.patient_id=? ORDER BY d.created_at DESC`, [req.params.pid])));
-imaging.post('/:pid', need('ImageCreate'), upload.single('file'), h(async (req) => {
+imaging.use(need('ImagingModule'));
+imaging.get('/:pid', h(async (req) => q(`SELECT d.id, d.patient_id, d.category_id, d.mime, d.description, d.tooth, d.created_at,
+    df.name category, df.abbr category_code, dr.reviewed_at, u.full_name reviewer
+  FROM document d LEFT JOIN definition df ON df.id=d.category_id
+  LEFT JOIN document_review dr ON dr.document_id=d.id LEFT JOIN app_user u ON u.id=dr.reviewer_id
+  WHERE d.patient_id=? ORDER BY d.created_at DESC, d.id DESC`, [req.params.pid])));
+imaging.post('/:pid/review/:id', need('ImageReview'), h(async (req) => tx(async (c) => {
+  const d = await one(`SELECT d.id FROM document d JOIN definition df ON df.id=d.category_id
+    WHERE d.id=? AND d.patient_id=? AND df.category='ImageCat' AND df.abbr='XR' FOR UPDATE`, [req.params.id, req.params.pid], c);
+  if (!d) throw notFound('X-ray not found for this patient');
+  const result = await q('INSERT IGNORE INTO document_review (document_id, reviewer_id) VALUES (?,?)', [d.id, req.user.id], c);
+  if (result.affectedRows) await audit(req.user.id, 'ImageReview', req.params.pid, `X-ray #${d.id} marked reviewed`, req, c);
+  return { ok: true };
+})));
+imaging.post('/:pid', need('ImageCreate'), acceptUpload, h(async (req) => {
   if (!req.file) throw bad('Upload an image (PNG, JPG, GIF, WebP, BMP) or PDF');
-  const res = await q('INSERT INTO document (patient_id, category_id, file_name, mime, description, tooth) VALUES (?,?,?,?,?,?)',
-    [req.params.pid, req.body.category_id || null, req.file.filename, req.file.mimetype, req.body.description || req.file.originalname, req.body.tooth || null]);
-  await audit(req.user.id, 'ImageCreate', req.params.pid, `Image uploaded: ${req.file.originalname}`);
-  return { id: res.insertId };
+  try {
+    await checkFileType(req.file);
+    return await tx(async (c) => {
+      if (!(await one('SELECT id FROM patient WHERE id=?', [req.params.pid], c))) throw notFound('Patient not found');
+      const category = req.body.category_id || null;
+      if (category && !(await one("SELECT id FROM definition WHERE id=? AND category='ImageCat'", [category], c))) throw bad('Invalid imaging category');
+      const res = await q('INSERT INTO document (patient_id, category_id, file_name, mime, description, tooth) VALUES (?,?,?,?,?,?)',
+        [req.params.pid, category, req.file.filename, req.file.mimetype, (req.body.description || req.file.originalname).slice(0, 255), req.body.tooth || null], c);
+      await audit(req.user.id, 'ImageCreate', req.params.pid, `Image uploaded: ${req.file.originalname}`, req, c);
+      return { id: res.insertId };
+    });
+  } catch (error) {
+    await fs.promises.rm(req.file.path, { force: true }).catch((cleanupError) => console.error('Imaging upload cleanup failed', cleanupError));
+    throw error;
+  }
 }));
-imaging.get('/file/:id', need('ImagingModule'), h(async (req, res) => {
+imaging.get('/file/:id', h(async (req, res) => {
   const d = await one('SELECT * FROM document WHERE id=?', [req.params.id]);
   if (!d) throw notFound();
+  if (d.mime === 'application/pdf') {
+    const policy = res.get('Content-Security-Policy');
+    if (policy) res.set('Content-Security-Policy', policy.replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
+    res.set('X-Frame-Options', 'SAMEORIGIN');
+  }
   res.type(d.mime).sendFile(path.join(UPLOAD, path.basename(d.file_name)));
 }));
 imaging.put('/doc/:id', need('ImageCreate'), h(async (req) => {
