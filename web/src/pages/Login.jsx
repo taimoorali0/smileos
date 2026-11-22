@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { sapi } from './SuperAdmin.jsx';
 import { get, post, getClinic, setClinic as saveClinic } from '../api.js';
 import { PasswordInput, ChangePasswordForm, MfaSetup, passwordChecks } from '../components/Security.jsx';
 
@@ -7,6 +8,8 @@ import { PasswordInput, ChangePasswordForm, MfaSetup, passwordChecks } from '../
  * props: onLogin(user), initialUser (already signed in but must finish a step), message (e.g. "signed out for inactivity")
  */
 export default function Login({ onLogin, initialUser, message }) {
+  const [platform, setPlatform] = useState(() => new URLSearchParams(window.location.search).get('account') === 'platform');
+  const [setup, setSetup] = useState(null);
   const [clinic, setClinic] = useState(null);
   const [step, setStep] = useState(() => (initialUser?.mustChangePassword ? 'change' : initialUser?.mustSetupMfa ? 'mfasetup' : 'login'));
   const [u, setU] = useState(() => { try { return localStorage.getItem('smileos.user') || ''; } catch { return ''; } });
@@ -30,11 +33,18 @@ export default function Login({ onLogin, initialUser, message }) {
     e.preventDefault(); setBusy(true); setErr('');
     try {
       try { if (remember) localStorage.setItem('smileos.user', u.trim()); else localStorage.removeItem('smileos.user'); } catch { /* storage blocked */ }
+      if (platform) {
+        const response = await sapi('POST', '/login', { email: u.trim(), password: p });
+        setP('');
+        setSetup(response.mfaSetup ? { qr: response.qr, secret: response.secret } : null);
+        setStep('mfa');
+        return;
+      }
       if (askCode) {
         const code = clinicCode.trim().toLowerCase();
         if (!code) throw new Error('Enter your clinic code');
         saveClinic(code);
-        try { const c = await loadClinic(); if (c.noClinic) throw new Error(); } catch { saveClinic(''); throw new Error(`Clinic code "${code}" was not found. Check it with your clinic.`); }
+        try { await loadClinic(); } catch (error) { saveClinic(''); throw error; }
       }
       const r = await post('/auth/login', { username: u.trim(), password: p });
       setP('');
@@ -43,7 +53,15 @@ export default function Login({ onLogin, initialUser, message }) {
   };
   const submitCode = async (e) => {
     e.preventDefault(); setBusy(true); setErr('');
-    try { const r = await post('/auth/mfa', { code }); await finish(r.user); } catch (x) { setErr(x.message); setCode(''); } finally { setBusy(false); }
+    try {
+      if (platform) {
+        await sapi('POST', '/mfa', { code });
+        window.location.assign('/superadmin');
+      } else {
+        const r = await post('/auth/mfa', { code });
+        await finish(r.user);
+      }
+    } catch (x) { setErr(x.message); setCode(''); } finally { setBusy(false); }
   };
   const refreshAndFinish = async () => finish(await get('/auth/me'));
 
@@ -70,30 +88,42 @@ export default function Login({ onLogin, initialUser, message }) {
           {(
             <>
               <h2>{step === 'login' ? 'Welcome back' : titles[step]}</h2>
-              {step === 'login' && <p className="muted" style={{ margin: '-6px 0 4px' }}>{clinic && !clinic.noClinic && !clinic.bad ? `Sign in to ${clinic.name}` : 'Sign in to your clinic'}</p>}
+              {step === 'login' && <p className="muted" style={{ margin: '-6px 0 4px' }}>{platform ? 'Manage SmileOS clinics' : clinic && !clinic.noClinic && !clinic.bad ? `Sign in to ${clinic.name}` : 'Sign in to your clinic'}</p>}
               {message && step === 'login' && <div className="alert" role="status">{message}</div>}
               {err && <div className="alert danger" role="alert">{err}</div>}
               {step === 'login' && (
                 <form className="col" onSubmit={submit}>
-                  {askCode && <label className="field">Clinic code<input className="input" value={clinicCode} onChange={(e) => setClinicCode(e.target.value.replace(/\s/g, '').toLowerCase())} autoFocus={!clinicCode} autoCapitalize="none" spellCheck="false" placeholder="e.g. demo" /></label>}
-                  <label className="field">Username<input className="input" value={u} onChange={(e) => setU(e.target.value)} autoFocus={!!clinicCode && !u} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder="e.g. frontdesk" /></label>
+                  <label className="field">Account type
+                    <select className="input" value={platform ? 'platform' : 'clinic'} disabled={busy}
+                      onChange={(e) => { setPlatform(e.target.value === 'platform'); setErr(''); setP(''); }}>
+                      <option value="clinic">Clinic staff</option>
+                      <option value="platform">Platform administrator</option>
+                    </select>
+                  </label>
+                  {!platform && askCode && <label className="field">Clinic code<input className="input" value={clinicCode} onChange={(e) => setClinicCode(e.target.value.replace(/\s/g, '').toLowerCase())} autoFocus={!clinicCode} autoCapitalize="none" spellCheck="false" placeholder="e.g. demo" /></label>}
+                  <label className="field">{platform ? 'Email' : 'Username'}<input className="input" type={platform ? 'email' : 'text'} value={u} onChange={(e) => setU(e.target.value)} autoFocus={!!clinicCode && !u} autoComplete="username" autoCapitalize="none" spellCheck="false" placeholder={platform ? 'admin@example.com' : 'e.g. frontdesk'} /></label>
                   <PasswordInput label="Password" value={p} onChange={setP} autoComplete="current-password" autoFocus={!!u} />
                   <div className="row" style={{ justifyContent: 'space-between' }}>
                     <label className="check small"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />Remember my username</label>
-                    <button type="button" className="btn ghost sm" onClick={() => { setStep('forgot'); setErr(''); }}>Forgot password?</button>
+                    {!platform && <button type="button" className="btn ghost sm" onClick={() => { setStep('forgot'); setErr(''); }}>Forgot password?</button>}
                   </div>
-                  <button className="btn login-btn" disabled={busy || !u || !p || (askCode && !clinicCode)}>{busy ? 'Signing in…' : 'Sign in'}</button>
-                  <p className="muted small" style={{ margin: 0, textAlign: 'center' }}>Don't know your clinic code? Ask your clinic administrator. · <a href="/superadmin">SmileOS admin</a></p>
+                  <button className="btn login-btn" disabled={busy || !u || !p || (!platform && askCode && !clinicCode)}>{busy ? 'Signing in…' : 'Sign in'}</button>
+                  {!platform && <p className="muted small" style={{ margin: 0, textAlign: 'center' }}>Ask your clinic administrator if you need your clinic code.</p>}
                 </form>
               )}
               {step === 'mfa' && (
                 <form className="col" onSubmit={submitCode}>
+                  {setup && <>
+                    <p>Scan this QR code in your authenticator app to set up two-factor sign-in.</p>
+                    <img src={setup.qr} width="200" height="200" alt="Authenticator setup QR code" style={{ alignSelf: 'center', background: '#fff' }} />
+                    <code style={{ textAlign: 'center', wordBreak: 'break-all' }}>{setup.secret}</code>
+                  </>}
                   <p className="muted" style={{ margin: 0 }}>Open your authenticator app and enter the 6-digit code for SmileOS.</p>
                   <input className="input" aria-label="6-digit code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} value={code}
                     onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} style={{ fontSize: 28, letterSpacing: 12, textAlign: 'center', minHeight: 56 }} />
                   <button className="btn primary" style={{ minHeight: 46 }} disabled={busy || code.length !== 6}>Verify</button>
-                  <button type="button" className="btn ghost" onClick={() => { post('/auth/logout').catch(() => {}); setStep('login'); setErr(''); }}>Use a different account</button>
-                  <p className="muted small" style={{ margin: 0 }}>Lost your phone? Your clinic administrator can reset two-factor for you.</p>
+                  <button type="button" className="btn ghost" onClick={() => { (platform ? sapi('POST', '/logout', {}) : post('/auth/logout')).catch(() => {}); setSetup(null); setCode(''); setStep('login'); setErr(''); }}>Use a different account</button>
+                  {!platform && <p className="muted small" style={{ margin: 0 }}>Lost your phone? Your clinic administrator can reset two-factor for you.</p>}
                 </form>
               )}
               {step === 'forgot' && <ForgotForm initial={u} onBack={() => setStep('login')} />}

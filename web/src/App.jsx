@@ -93,6 +93,7 @@ function StaffApp() {
     setUnauthorizedHandler((msg) => { setUser(null); setPatientState(null); setLoginMsg(msg || 'Your session has ended. Please sign in again.'); });
     (async () => {
       try {
+        if (new URLSearchParams(window.location.search).get('account') === 'platform') return;
         const me = await get('/auth/me');
         if (me.mustChangePassword || me.mustSetupMfa) setPending(me); else await afterLogin(me);
       } catch { /* not signed in */ } finally { setBooting(false); }

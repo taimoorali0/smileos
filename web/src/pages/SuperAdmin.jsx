@@ -1,9 +1,9 @@
 // SmileOS super admin console (/superadmin): create and manage clinics.
 import React, { useCallback, useEffect, useState } from 'react';
 import { Modal, Icon } from '../components/ui.jsx';
-import { PasswordInput, IdleGuard } from '../components/Security.jsx';
+import { IdleGuard } from '../components/Security.jsx';
 
-const sapi = async (method, url, body) => {
+export const sapi = async (method, url, body) => {
   const res = await fetch('/api/super' + url, { method, credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-smileos': '1' }, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: res.status });
@@ -14,65 +14,16 @@ const slugify = (s) => s.toLowerCase().replace(/^(dr|the)\.?\s+/, '').replace(/[
 export default function SuperAdmin() {
   const [me, setMe] = useState(null);
   const [checking, setChecking] = useState(true);
-  const [msg, setMsg] = useState('');
   useEffect(() => { sapi('GET', '/me').then(setMe).catch(() => {}).finally(() => setChecking(false)); }, []);
-  const logout = useCallback(async (m = '') => { await sapi('POST', '/logout').catch(() => {}); setMe(null); setMsg(m); }, []);
+  const logout = useCallback(async () => { await sapi('POST', '/logout', {}).catch(() => {}); setMe(null); }, []);
+  useEffect(() => { if (!checking && !me) window.location.replace('/?account=platform'); }, [checking, me]);
   if (checking) return <div className="preloader"><img src="/preloader.svg" width="96" height="100" alt="Loading" /></div>;
-  if (!me) return <SuperLogin message={msg} onDone={async () => setMe(await sapi('GET', '/me'))} />;
+  if (!me) return null;
   return (
     <>
-      <Console me={me} onLogout={() => logout('You have signed out.')} />
-      <IdleGuard minutes={15} onTimeout={() => logout('Signed out after 15 minutes of inactivity.')} />
+      <Console me={me} onLogout={logout} />
+      <IdleGuard minutes={15} onTimeout={logout} />
     </>
-  );
-}
-
-function SuperLogin({ onDone, message }) {
-  const [step, setStep] = useState('login');
-  const [email, setEmail] = useState('');
-  const [pw, setPw] = useState('');
-  const [code, setCode] = useState('');
-  const [setup, setSetup] = useState(null);
-  const [err, setErr] = useState('');
-  const login = async (e) => {
-    e.preventDefault(); setErr('');
-    try { const r = await sapi('POST', '/login', { email, password: pw }); setPw(''); if (r.mfaSetup) { setSetup(r); setStep('setup'); } else setStep('mfa'); } catch (x) { setErr(x.message); }
-  };
-  const verify = async (e) => { e.preventDefault(); setErr(''); try { await sapi('POST', '/mfa', { code }); await onDone(); } catch (x) { setErr(x.message); setCode(''); } };
-  const codeInput = <input className="input" aria-label="6-digit code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} style={{ fontSize: 28, letterSpacing: 12, textAlign: 'center', minHeight: 56 }} />;
-  return (
-    <div className="login-wrap">
-      <div className="login-frame">
-      <aside className="login-brand">
-        <div className="login-orb" aria-hidden="true"><span className="login-word">SMILE</span><span className="sphere" /><span className="login-sub">ADMIN CONSOLE</span></div>
-        <div className="login-copy"><h1>SmileOS administration</h1><p>Create and manage clinics securely.</p>
-        <ul><li>Create and manage clinics</li><li>Each clinic's data in its own database</li><li>Two-factor sign-in required</li><li>Every action is logged</li></ul></div></aside>
-      <main className="login-main">
-        <div className="login-card">
-          <div className="login-logo"><img src="/icon.svg" width="34" height="34" alt="SmileOS" /></div>
-          <h2>{{ login: 'Administrator sign-in', mfa: 'Two-factor check', setup: 'Set up two-factor' }[step]}</h2>
-          {message && step === 'login' && <div className="alert">{message}</div>}
-          {err && <div className="alert danger" role="alert">{err}</div>}
-          {step === 'login' && (
-            <form className="col" onSubmit={login}>
-              <label className="field">Email<input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" autoFocus /></label>
-              <PasswordInput label="Password" value={pw} onChange={setPw} autoComplete="current-password" />
-              <button className="btn login-btn" disabled={!email || !pw}>Continue</button>
-            </form>
-          )}
-          {step === 'mfa' && <form className="col" onSubmit={verify}><p className="muted" style={{ margin: 0 }}>Enter the 6-digit code from your authenticator app.</p>{codeInput}<button className="btn primary" style={{ minHeight: 46 }} disabled={code.length !== 6}>Verify</button></form>}
-          {step === 'setup' && setup && (
-            <form className="col" onSubmit={verify}>
-              <p className="muted" style={{ margin: 0 }}>Two-factor is required for administrators. Scan this with Google Authenticator, Microsoft Authenticator or Authy, then enter the code.</p>
-              <img src={setup.qr} width="200" height="200" alt="QR code for your authenticator app" style={{ alignSelf: 'center', background: '#fff', borderRadius: 12 }} />
-              <code style={{ textAlign: 'center', wordBreak: 'break-all' }}>{setup.secret.match(/.{1,4}/g).join(' ')}</code>
-              {codeInput}<button className="btn primary" style={{ minHeight: 46 }} disabled={code.length !== 6}>Turn on and sign in</button>
-            </form>
-          )}
-        </div>
-      </main>
-    </div>
-    </div>
   );
 }
 

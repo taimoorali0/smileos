@@ -11,7 +11,7 @@ export const PERMISSIONS = [
   'ChartModule', 'ProcEdit', 'ProcComplete', 'ProcDelete', 'RxCreate', 'PerioEdit',
   'TreatPlanModule', 'TreatPlanEdit',
   'AccountModule', 'PaymentCreate', 'PaymentDelete', 'AdjustmentCreate', 'ClaimEdit', 'InsPayCreate', 'PaymentPlanEdit',
-  'ImagingModule', 'ImageCreate', 'ImageDelete',
+  'ImagingModule', 'ImageCreate', 'ImageReview', 'ImageDelete',
   'ManageModule', 'TimeCardEdit', 'SupplyEdit', 'Billing',
   'Reports', 'Setup', 'SecurityAdmin', 'AuditTrail',
 ];
@@ -30,8 +30,8 @@ export async function securityPolicy() {
   return { idleMinutes: Math.max(1, Number(m.SessionIdleMinutes || 15)), requireMfa: m.RequireMfa === '1', minLength: Math.max(10, Number(m.PasswordMinLength || 10)) };
 }
 
-export async function audit(userId, permission, patientId, text, req) {
-  await q('INSERT INTO audit_log (user_id, permission, patient_id, log_text, ip) VALUES (?,?,?,?,?)', [userId, permission, patientId || null, String(text).slice(0, 1000), ip(req) || context().ip || null]);
+export async function audit(userId, permission, patientId, text, req, conn) {
+  await q('INSERT INTO audit_log (user_id, permission, patient_id, log_text, ip) VALUES (?,?,?,?,?)', [userId, permission, patientId || null, String(text).slice(0, 1000), ip(req) || context().ip || null], conn);
 }
 const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', BCRYPT_COST);
 

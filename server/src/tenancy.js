@@ -77,14 +77,26 @@ export function tempPassword() {
 /** Create a clinic: database, default setup and its first admin (who must change the temporary password). */
 export async function provisionTenant({ slug, name, adminEmail, adminUsername = 'admin', adminName, phone, address, plan = 'standard' }) {
   slug = String(slug || '').toLowerCase().trim();
-  if (!validSlug(slug)) throw new HttpError(400, 'Web address must be 4–32 characters: lowercase letters, numbers and dashes, starting with a letter.');
+  if (!validSlug(slug)) throw new HttpError(400, 'Clinic code must be 4–32 characters: lowercase letters, numbers and dashes, starting with a letter.');
   if (!name) throw new HttpError(400, 'Clinic name is required');
-  if ((await cq('SELECT id FROM tenant WHERE slug=?', [slug])).length) throw new HttpError(409, 'That web address is already taken');
   const dbName = `smileos_t_${slug.replace(/-/g, '_')}`;
-  const res = await cq('INSERT INTO tenant (slug, name, db_name, status, admin_email, phone, address, plan) VALUES (?,?,?,?,?,?,?,?)',
-    [slug, name, dbName, 'suspended', adminEmail || null, phone || null, address || null, plan]);
-  const password = tempPassword();
+  let res;
   try {
+    res = await cq('INSERT INTO tenant (slug, name, db_name, status, admin_email, phone, address, plan) VALUES (?,?,?,?,?,?,?,?)',
+      [slug, name, dbName, 'suspended', adminEmail || null, phone || null, address || null, plan]);
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') throw new HttpError(409, 'That clinic code is already reserved. Choose another code.');
+    throw error;
+  }
+  const password = tempPassword();
+  let createdDatabase = false;
+  try {
+    const connection = await adminConnection();
+    try {
+      // Claim the database name without reusing a database left by another installation.
+      await connection.query(`CREATE DATABASE \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+      createdDatabase = true;
+    } finally { await connection.end(); }
     await migrateClinicDb(dbName);
     await withDb(dbName, async () => {
       const { gid } = await seedClinicBase({ practiceName: name });
@@ -93,12 +105,24 @@ export async function provisionTenant({ slug, name, adminEmail, adminUsername = 
       await q('INSERT INTO audit_log (permission, log_text) VALUES (?,?)', ['Setup', `Clinic created by SmileOS administrator`]);
     });
     await cq("UPDATE tenant SET status='active' WHERE id=?", [res.insertId]);
-  } catch (e) {
-    await cq('DELETE FROM tenant WHERE id=?', [res.insertId]);
-    const c = await adminConnection(); await c.query(`DROP DATABASE IF EXISTS \`${dbName}\``); await c.end();
-    throw e;
+  } catch (error) {
+    try {
+      if (createdDatabase) {
+        const connection = await adminConnection();
+        try {
+          await connection.query(`DROP DATABASE \`${dbName}\``);
+        } finally { await connection.end(); }
+      }
+      await cq('DELETE FROM tenant WHERE id=?', [res.insertId]);
+    } catch (cleanupError) {
+      console.error('Clinic setup cleanup failed for', slug, cleanupError);
+      throw new HttpError(503, 'Clinic setup could not be completed or rolled back. Ask your server administrator to check the logs.');
+    }
+    if (error.code === 'ER_DB_CREATE_EXISTS') throw new HttpError(409, 'A database already uses that clinic code. Choose another code or contact your server administrator.');
+    throw error;
+  } finally {
+    forgetTenant(slug);
   }
-  forgetTenant(slug);
   return { id: res.insertId, slug, dbName, adminUsername, tempPassword: password };
 }
 

@@ -13,6 +13,7 @@ export async function seedClinicBase({ practiceName = 'My Dental Clinic' } = {})
     Hygienist: ['AppointmentsModule', 'AppointmentEdit', 'FamilyModule', 'ChartModule', 'ProcEdit', 'ProcComplete', 'PerioEdit', 'TreatPlanModule', 'ImagingModule', 'ImageCreate'],
     FrontDesk: ['AppointmentsModule', 'AppointmentCreate', 'AppointmentEdit', 'AppointmentMove', 'AppointmentDelete', 'AppointmentComplete', 'ConfirmationStatusEdit', 'Blockouts',
       'FamilyModule', 'PatientEdit', 'InsPlanEdit', 'ChartModule', 'TreatPlanModule', 'AccountModule', 'PaymentCreate', 'ImagingModule', 'ImageCreate', 'ManageModule'],
+    ImagingAssistant: ['FamilyModule', 'ImagingModule', 'ImageCreate'],
     Billing: ['AppointmentsModule', 'FamilyModule', 'PatientEdit', 'InsPlanEdit', 'TreatPlanModule', 'AccountModule', 'PaymentCreate', 'PaymentDelete', 'AdjustmentCreate',
       'ClaimEdit', 'InsPayCreate', 'PaymentPlanEdit', 'ManageModule', 'Billing', 'Reports'],
   };
